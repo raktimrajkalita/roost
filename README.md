@@ -4,7 +4,7 @@
 
 ![Roost preview](docs/preview.png)
 
-> **v2 is a native Swift/AppKit rewrite.** The panel is real glass that grows out of the physical notch on a spring. The original Hammerspoon prototype is still here in [`hammerspoon/`](hammerspoon/) and in the git history — see [The two UIs](#the-two-uis).
+> **Install the native app (this is v2).** Roost is now a real Swift/AppKit `.app` — the [Install](#install) steps below are the only ones you need. The earlier Hammerspoon prototype has been **retired**; it's kept in [`legacy/`](legacy/) for posterity, not for use. Don't install it. ([why](#legacy-the-original-hammerspoon-prototype))
 
 ---
 
@@ -93,18 +93,21 @@ Add `--install` to also copy it to `/Applications` and register a login item at 
 
 **Remove the login item:** `launchctl unload ~/Library/LaunchAgents/com.raktim.roost.plist && rm ~/Library/LaunchAgents/com.raktim.roost.plist`
 
-## The two UIs
+## Legacy: the original Hammerspoon prototype
 
-Roost's data layer (the reporter + the `~/.claude-notch/state` folder) is UI-agnostic. Two front-ends read it:
+Roost started life as a Hammerspoon (`hs.webview`) panel. That version is **retired**: the native `Roost.app` above replaces it and is the only one you should install. The old code stays in [`legacy/hammerspoon/`](legacy/hammerspoon/) and in the git history for posterity. It's the same idea in a heavier engine that needed Hammerspoon installed and used CSS blur instead of real glass.
 
-| | **Roost.app** (`Sources/Roost/`) | **Hammerspoon** (`hammerspoon/init.lua`) |
-|---|---|---|
-| Engine | Native Swift / AppKit / SwiftUI | Lua + `hs.webview` (HTML/CSS/JS) |
-| Backdrop | Real `NSVisualEffectView` glass | CSS blur |
-| Distribution | A double-clickable `.app` | Needs Hammerspoon installed |
-| Status | **Recommended** | The original prototype, kept for reference |
+<details>
+<summary>Running the retired version anyway (not recommended)</summary>
 
-The native app is the successor; the Hammerspoon build is where Roost started and stays in the tree and the git history. To use it instead: `brew install --cask hammerspoon`, copy `hammerspoon/init.lua` to `~/.hammerspoon/init.lua`, and `open -a Hammerspoon`.
+It reads the same `~/.claude-notch/state` folder, so with the reporter installed:
+
+```bash
+brew install --cask hammerspoon
+cp legacy/hammerspoon/init.lua ~/.hammerspoon/init.lua
+open -a Hammerspoon
+```
+</details>
 
 ## Project layout
 
@@ -123,7 +126,7 @@ icon/                     roost.png source + png-to-icns.swift + Roost.icns
 bin/                      the reporter (notch-hook.py) + gen-sounds.py  (shared)
 sounds/                   synthesized chimes (done.wav, waiting.wav)     (shared)
 hooks/                    the Claude Code hook snippet                    (shared)
-hammerspoon/              the original prototype UI
+legacy/hammerspoon/       the retired original prototype (do not install)
 ```
 
 ## Uninstall

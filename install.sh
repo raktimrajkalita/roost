@@ -26,6 +26,6 @@ echo "   ----------------------------------------------------------------"
 echo
 echo "-> Then build the UI (the native app):"
 echo "     ./build-app.sh --install       # Roost.app -> /Applications, starts at login"
-echo "   (Prefer the original Hammerspoon UI instead? See the README.)"
+echo "   (The old Hammerspoon build is retired -> legacy/; the native app replaces it.)"
 echo
 echo "Done. New Claude Code sessions report automatically; restart open ones to pick up the hooks."

@@ -46,5 +46,5 @@ packaged as a real double-clickable `Roost.app`.
 
 ## v1.0 — Hammerspoon prototype
 
-The original: a `hs.webview` notch panel driven by the same python reporter. Preserved in
-[`hammerspoon/`](hammerspoon/) and in the git history.
+The original: a `hs.webview` notch panel driven by the same python reporter. Retired and
+preserved in [`legacy/hammerspoon/`](legacy/hammerspoon/) and in the git history.
