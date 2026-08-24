@@ -8,3 +8,10 @@ mutes/
 __pycache__/
 *.pyc
 *.bak.*
+
+# swift build products
+.build/
+dist/
+
+# generated icon intermediates (Roost.icns is committed; the iconset is rebuilt from icon/roost.png)
+icon/*.iconset/
