@@ -1,0 +1,23 @@
+{
+  "//": "Merge this 'hooks' block into your ~/.claude/settings.json. If you already have a 'hooks' key, add these event arrays into it (and append to UserPromptSubmit rather than replacing it). $HOME is expanded by the shell that runs the hook.",
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3 $HOME/.claude-notch/bin/notch-hook.py working", "timeout": 5 } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "python3 $HOME/.claude-notch/bin/notch-hook.py tool", "timeout": 5 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 $HOME/.claude-notch/bin/notch-hook.py done", "timeout": 5 } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "python3 $HOME/.claude-notch/bin/notch-hook.py waiting", "timeout": 5 } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "python3 $HOME/.claude-notch/bin/notch-hook.py working", "timeout": 5 } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "python3 $HOME/.claude-notch/bin/notch-hook.py ended", "timeout": 5 } ] }
+    ]
+  }
+}

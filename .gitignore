@@ -1,0 +1,10 @@
+# runtime state — never commit
+state/
+mutes/
+*.local
+
+# macOS / python cruft
+.DS_Store
+__pycache__/
+*.pyc
+*.bak.*
