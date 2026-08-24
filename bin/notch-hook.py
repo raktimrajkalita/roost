@@ -64,15 +64,32 @@ def notify(title, message):
         pass
 
 
+def audio_is_playing():
+    """True if something is already playing audio on this Mac (music, video,
+    a browser tab, etc.), so we can boost the chime to cut through it."""
+    try:
+        out = subprocess.run(["pmset", "-g", "assertions"],
+                             capture_output=True, text=True, timeout=2).stdout
+    except Exception:
+        return False
+    # Browsers hold a "Playing audio" assertion; coreaudiod holds an active
+    # output context assertion whenever audio is flowing to the output device.
+    return ("Playing audio" in out) or ("coreaudiod" in out and "output.context" in out)
+
+
 def play(sound):
     if os.path.exists(MUTED) or os.path.exists(DISABLED):
         return
     p = os.path.join(SOUNDS, sound)
     if not os.path.exists(p):
         return
+    vol = "2.0" if audio_is_playing() else "1.0"   # 200% so it's audible over music
     try:
-        subprocess.Popen(["afplay", p],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # start_new_session detaches afplay into its own session so it survives the
+        # short-lived hook process being reaped (otherwise the chime gets cut off).
+        subprocess.Popen(["afplay", "-v", vol, p],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
     except Exception:
         pass
 
@@ -127,15 +144,22 @@ def main():
         state["status"] = "done"
         state["done_at"] = time.time()
         if not smuted:
-            play("done.wav")
-            notify(project + " - done", state.get("last_action", "Claude finished a turn"))
+            play("done.wav")   # the chime + notch panel are the notification (no macOS banner)
     elif event == "waiting":
-        state["status"] = "waiting"
-        msg = data.get("message") or "needs your input"
-        state["last_action"] = str(msg)[:60]
-        if not smuted:
-            play("waiting.wav")
-            notify(project + " - waiting", str(msg)[:100])
+        # Claude Code's Notification hook fires for two different things:
+        #   (a) a real permission / answer popup ("... needs your permission ..."),
+        #   (b) an idle "waiting for your input" ping ~60s after a turn finishes.
+        # Only (a) is a "reply to me" prompt. (b) after a completed task must stay
+        # done, and must NOT play the chime.
+        msg = data.get("message") or ""
+        low = msg.lower()
+        if "waiting for" in low and "input" in low:
+            state["status"] = "done"          # idle after completion, not a real prompt
+        else:
+            state["status"] = "waiting"       # a genuine popup asking you to answer
+            state["last_action"] = (msg or "needs your reply")[:60]
+            if not smuted:
+                play("waiting.wav")   # chime only, no macOS banner
 
     try:
         with open(statefile, "w") as f:

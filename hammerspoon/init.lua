@@ -18,6 +18,7 @@ hs.fs.mkdir(MUTE_DIR)
 local M = {
   sessions = {}, webview = nil, ucc = nil, menubar = nil,
   visible = false, pinnedUntil = 0, panelFrame = nil, sig = "", lastInside = 0,
+  nameByUuid = {},   -- iTerm2 session uuid -> cleaned tab name (your renames)
 }
 
 -- geometry (points)
@@ -46,10 +47,18 @@ local function loadSessions()
             local raw = f:read("a"); f:close()
             local ok, data = pcall(hs.json.decode, raw)
             if ok and type(data) == "table" then
-              if not data.updated or (os.time() - data.updated) < 8 * 3600 then
+              if not data.updated or (os.time() - data.updated) < 20 * 60 then  -- drop sessions dormant > 20 min
                 data._key = file
                 data._fid = file:gsub("%.json$", "")
                 data.muted = hs.fs.attributes(MUTE_DIR .. "/" .. data._fid) ~= nil
+                -- normalize stale/ambiguous statuses so nothing gets stuck
+                local age = os.time() - (data.updated or os.time())
+                local act = (data.last_action or ""):lower()
+                if data.status == "waiting" and act:find("waiting for") then
+                  data.status = "done"                 -- idle ping, not a real prompt
+                elseif data.status == "thinking" and age > 300 then
+                  data.status = "done"                 -- no activity for 5 min -> treat as idle
+                end
                 out[file] = data
               end
             end
@@ -215,12 +224,28 @@ local function geomFor(list)
   return frame, headH, panelH, shown
 end
 
+-- prefer the iTerm2 tab name you set; fall back to the folder name
+local function cleanName(n)
+  if not n or n == "" then return nil end
+  n = n:gsub("%s*%b()%s*$", "")                    -- drop trailing job, e.g. " (node)"
+  n = n:gsub("^[\194-\244][\128-\191]*%s+", "")    -- drop a leading UTF-8 status glyph + space
+  n = n:gsub("^%s+", ""):gsub("%s+$", "")
+  if n == "" then return nil end
+  return n
+end
+
+local function displayName(d)
+  local uuid = (d.iterm_session or ""):match(":(.+)$")
+  if uuid and M.nameByUuid[uuid] then return M.nameByUuid[uuid] end
+  return d.project or "session"
+end
+
 local function stateJSON(list, shown, menuH, panelH)
   local rows = {}
   for i = 1, shown do
     local d = list[i]
     rows[i] = {
-      key = d._key, project = d.project or "session",
+      key = d._key, project = displayName(d),
       action = d.last_action or d.status or "", status = d.status or "idle",
       muted = d.muted and true or false,
     }
@@ -231,7 +256,7 @@ end
 local function signature(list)
   local t = {}
   for _, d in ipairs(list) do
-    t[#t + 1] = (d._key or "") .. "|" .. (d.status or "") .. "|" .. (d.last_action or "") .. "|" .. tostring(d.muted)
+    t[#t + 1] = (d._key or "") .. "|" .. (d.status or "") .. "|" .. (d.last_action or "") .. "|" .. tostring(d.muted) .. "|" .. displayName(d)
   end
   return table.concat(t, ";")
 end
@@ -246,10 +271,44 @@ local function pushState()
   M.webview:evaluateJavaScript("window.render && window.render(" .. stateJSON(list, shown, menuH, panelH) .. ")")
 end
 
+-- fetch iTerm2 session names asynchronously (non-blocking) and cache them.
+-- NOTE: `tab` is a class name inside `tell iTerm2`, so we grab the real tab
+-- character OUTSIDE the tell block as a field delimiter.
+local NAME_SCRIPT = [[
+set d to tab
+set lf to linefeed
+tell application "iTerm2"
+  set out to ""
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with sess in sessions of t
+        set out to out & (unique id of sess) & d & (name of sess) & lf
+      end repeat
+    end repeat
+  end repeat
+  return out
+end tell
+]]
+local function refreshNames()
+  hs.task.new("/usr/bin/osascript", function(code, stdout)
+    if code ~= 0 or type(stdout) ~= "string" then return end
+    local map = {}
+    for line in stdout:gmatch("[^\n]+") do
+      local uuid, nm = line:match("^([^\t]+)\t(.*)$")
+      if uuid then local c = cleanName(nm); if c then map[uuid] = c end end
+    end
+    M.nameByUuid = map
+    if M.visible then pushState() end
+  end, { "-e", NAME_SCRIPT }):start()
+end
+
 local function showPanel()
-  pushState()
-  if not M.visible then M.webview:show(0); M.visible = true end
-  M.webview:evaluateJavaScript("window.replay && window.replay()")
+  local wasHidden = not M.visible
+  pushState()                                   -- always update contents (instant, no animation)
+  if wasHidden then                             -- play the appear animation ONLY on closed -> open
+    M.webview:show(0); M.visible = true
+    M.webview:evaluateJavaScript("window.replay && window.replay()")
+  end
 end
 local function hidePanel()
   if M.visible then M.webview:hide(0); M.visible = false end
@@ -288,7 +347,7 @@ local function menubarMenu()
   items[#items + 1] = { title = "-" }
   items[#items + 1] = { title = isMuted() and "Unmute all sound" or "Mute all sound",
     fn = function() if isMuted() then os.remove(MUTED_FLAG) else local f = io.open(MUTED_FLAG, "w"); if f then f:close() end end end }
-  items[#items + 1] = { title = "Rescan now", fn = function() M.refresh() end }
+  items[#items + 1] = { title = "Force refresh", fn = function() M.forceRefresh() end }
   return items
 end
 
@@ -303,19 +362,32 @@ function M.refresh()
   if M.visible then
     if signature(sortedSessions()) ~= M.sig then pushState() end
   end
-  if now > prev then M.pinnedUntil = os.time() + 4; showPanel() end
+  if now > prev then M.pinnedUntil = hs.timer.secondsSinceEpoch() + 3; showPanel() end  -- auto-drop, 3s
 end
 
 local function pointIn(p, f) return f and p.x >= f.x and p.x <= f.x + f.w and p.y >= f.y and p.y <= f.y + f.h end
 local function tick()
   local full, menuH = screenGeo()
-  local trig = { x = full.x + (full.w - TRIG_W) / 2, y = full.y, w = TRIG_W, h = menuH + 4 }
   local p = hs.mouse.absolutePosition()
-  local inside = pointIn(p, trig) or (M.visible and pointIn(p, M.panelFrame))
   local nowc = hs.timer.secondsSinceEpoch()
+
+  -- OPEN: hovering the notch strip at the top center
+  local trig = { x = full.x + (full.w - TRIG_W) / 2, y = full.y, w = TRIG_W, h = menuH + 6 }
+  local inTrig = pointIn(p, trig)
+
+  -- KEEP: cursor anywhere within the EXPANDED PANEL itself (its real visible bounds) + small edge pad
+  local overPanel = false
+  if M.visible and M.panelFrame then
+    local pf, pad = M.panelFrame, 14
+    local left, right = pf.x + SH - pad, pf.x + SH + W + pad
+    local top, bottom = full.y - pad, (pf.y + pf.h - BP) + pad   -- visible panel top..bottom
+    overPanel = (p.x >= left and p.x <= right and p.y >= top and p.y <= bottom)
+  end
+
+  local inside = inTrig or overPanel
   if inside then M.lastInside = nowc end
-  -- grace period so hovering the edge doesn't flicker show/hide
-  local want = inside or (os.time() < M.pinnedUntil) or (M.visible and (nowc - M.lastInside) < 0.3)
+  -- open while: hovering the notch, over the panel, within the 3s auto-drop pin, or a brief leave-grace
+  local want = inside or (nowc < M.pinnedUntil) or (M.visible and (nowc - M.lastInside) < 0.25)
   if want then if not M.visible then showPanel() end
   else if M.visible then hidePanel() end end
 end
@@ -342,19 +414,67 @@ pcall(function() M.webview:behaviorAsLabels({ "canJoinAllSpaces", "stationary" }
 pcall(function() M.webview:level(hs.canvas.windowLevels.popUpMenu) end)
 M.webview:transparent(true)
 M.webview:allowTextEntry(false)
-M.webview:html(SHELL)                 -- load the shell ONCE
-hs.timer.doAfter(0.4, function() pushState() end)  -- initial fill once loaded
+-- render the moment the shell actually finishes loading (event-driven, not a guessed delay)
+M.webview:navigationCallback(function(action)
+  if action == "didFinishNavigation" then pushState() end
+end)
+M.webview:html(SHELL)
+
+-- purge state files for sessions dormant past the display window (keeps the dir clean)
+local function purgeStale()
+  pcall(function()
+    for file in hs.fs.dir(STATE_DIR) do
+      if file:sub(-5) == ".json" then
+        local path = STATE_DIR .. "/" .. file
+        local a = hs.fs.attributes(path)
+        if a and a.modification and (os.time() - a.modification) > 1800 then os.remove(path) end
+      end
+    end
+  end)
+end
+
+-- POWERFUL REFRESH: guarantees a clean, fully re-fetched state no matter what.
+-- Reloads the shell if it ever detached, re-fetches iTerm names, re-reads + purges
+-- state, and re-renders. Safe to call anytime (boot, menu, hotkey).
+function M.forceRefresh()
+  purgeStale()
+  refreshNames()
+  loadSessions()
+  updateMenubar()
+  M.webview:evaluateJavaScript("typeof window.render", function(r)
+    if r ~= "function" then M.webview:html(SHELL)   -- navigationCallback re-renders on load
+    else pushState() end
+  end)
+end
 
 M.menubar = hs.menubar.new()
 if M.menubar then M.menubar:setMenu(menubarMenu) end
 updateMenubar()
 
+refreshNames()   -- populate iTerm tab names early
 M.watcher = hs.pathwatcher.new(STATE_DIR, function() M.refresh() end):start()
 M.hoverTimer = hs.timer.doEvery(0.12, tick):start()
-M.sweepTimer = hs.timer.doEvery(5, function()
+M.sweepTimer = hs.timer.doEvery(4, function()
+  refreshNames()
+  purgeStale()
   loadSessions(); updateMenubar()
+  -- self-heal: if the webview shell ever detached, reload it (navigationCallback re-renders)
+  M.webview:evaluateJavaScript("typeof window.render", function(r)
+    if r ~= "function" then M.webview:html(SHELL) end
+  end)
   if M.visible and signature(sortedSessions()) ~= M.sig then pushState() end
 end):start()
+
+-- belt-and-suspenders: one powerful refresh shortly after boot, in case a reload
+-- race left the shell or names unfetched
+hs.timer.doAfter(1.0, function() M.forceRefresh() end)
+
+-- manual powerful reload:  ⌃⌥⌘R
+pcall(function()
+  M.hotkey = hs.hotkey.bind({ "cmd", "alt", "ctrl" }, "R", function()
+    M.forceRefresh(); hs.alert.show("\u{1FAB9} Roost refreshed")
+  end)
+end)
 
 M.show = function() M.pinnedUntil = os.time() + 8; showPanel() end
 M.hide = function() M.pinnedUntil = 0; hidePanel() end
