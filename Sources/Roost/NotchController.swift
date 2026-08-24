@@ -77,11 +77,13 @@ final class NotchController {
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         panel.isFloatingPanel = true
-        panel.level = .popUpMenu                 // above the menu bar / notch
+        panel.hidesOnDeactivate = false          // accessory app is never "active" — don't let the panel get suppressed
+        panel.level = .screenSaver               // topmost: above the menu bar/notch AND over another app's fullscreen
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false                  // the SwiftUI view draws its own shadow
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        // show on every Space, and join a fullscreen app's space instead of hiding behind it
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: NotchView(model: model))
         panel.alphaValue = 0
         model.notchHeight = notchHeight
@@ -115,6 +117,8 @@ final class NotchController {
         updateContent()
         panel.setFrame(panelFrame(), display: true, animate: false)   // full-size window; SwiftUI does the grow
         panel.alphaValue = 1
+        // re-assert every drop so it lands on whatever Space / fullscreen app is active right now
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.orderFrontRegardless()
         visible = true
         model.expanded = true                    // springs open from the notch

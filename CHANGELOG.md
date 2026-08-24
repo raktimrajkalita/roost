@@ -30,6 +30,9 @@ packaged as a real double-clickable `Roost.app`.
 - Muted bell is white (was amber).
 
 ### Quality of life
+- **Shows everywhere:** the auto-drop now appears on whatever Space is active and over fullscreen
+  apps — fixed `NSPanel.hidesOnDeactivate` (default `true`) suppressing the panel whenever another
+  app was frontmost; panel is now `.screenSaver` level with `[.canJoinAllSpaces, .fullScreenAuxiliary]`.
 - **Refresh clears done:** the reload button hides every finished row; they stay hidden until a
   *new* completion arrives (tracked by `done_at` vs a dismissal timestamp).
 - **10-row cap + scroll:** the panel shows at most 10 rows and scrolls beyond that.
