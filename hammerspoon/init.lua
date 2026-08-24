@@ -191,7 +191,7 @@ window.render=function(s){
     seen[d.key]=1;
     var li=ul.querySelector('li[data-key="'+d.key+'"]');
     if(!li){                                   /* new session: create + animate in */
-      li=document.createElement('li'); li.setAttribute('data-key',d.key); li.className='row enter';
+      li=document.createElement('li'); li.setAttribute('data-key',d.key); li.className='row';  /* static; cascade only runs on open via replay() */
       li.innerHTML='<span class="dot"></span><div class="meta"><div class="proj"></div><div class="act"></div></div><div class="right"><span class="sw"></span><button class="mute" data-key="'+d.key+'">'+SVG+'</button></div>';
       ul.appendChild(li);
     }                                          /* existing: update in place, no re-animate */
@@ -204,7 +204,9 @@ window.render=function(s){
     var sw=li.querySelector('.sw'); sw.className='sw '+d.status; sw.textContent=d.status;
     var mb=li.querySelector('.mute'); mb.className='mute'+(d.muted?' on':''); mb.title=d.muted?'unmute this session':'mute this session';
   });
-  s.rows.forEach(function(d){ var li=ul.querySelector('li[data-key="'+d.key+'"]'); if(li) ul.appendChild(li); }); /* reorder to match */
+  /* reorder ONLY rows that are actually out of place — re-inserting every row each
+     render is what was restarting their animation and making the list flicker */
+  for(var i=0;i<s.rows.length;i++){ var want=ul.querySelector('li[data-key="'+s.rows[i].key+'"]'); if(want && ul.children[i]!==want){ ul.insertBefore(want, ul.children[i]||null); } }
   Array.prototype.slice.call(ul.querySelectorAll('li[data-key]')).forEach(function(li){
     if(!seen[li.getAttribute('data-key')]) li.remove();
   });
@@ -453,8 +455,11 @@ updateMenubar()
 
 refreshNames()   -- populate iTerm tab names early
 M.watcher = hs.pathwatcher.new(STATE_DIR, function() M.refresh() end):start()
-M.hoverTimer = hs.timer.doEvery(0.12, tick):start()
+-- pcall-wrap so a single stray error can never permanently kill the hover loop
+-- (Hammerspoon stops a timer whose callback throws once)
+M.hoverTimer = hs.timer.doEvery(0.12, function() pcall(tick) end):start()
 M.sweepTimer = hs.timer.doEvery(4, function()
+  if M.hoverTimer and not M.hoverTimer:running() then M.hoverTimer:start() end  -- self-heal the hover loop
   refreshNames()
   purgeStale()
   loadSessions(); updateMenubar()
