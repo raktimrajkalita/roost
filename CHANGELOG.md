@@ -35,6 +35,9 @@ packaged as a real double-clickable `Roost.app`.
   records the tab's controlling tty via `ps`), and other terminals fall back to raising the app.
 - **Dismiss a row:** hover a row and click the ✕ to remove it; it comes back the moment that
   session next updates (per-session, in-memory).
+- **Terminal.app names:** the panel shows a Terminal tab's custom title (its rename) when set,
+  fetched by `tty` alongside the iTerm names — both guarded by `is running` so a background
+  refresh never launches a closed terminal.
 - **Shows everywhere:** the auto-drop now appears on whatever Space is active and over fullscreen
   apps — fixed `NSPanel.hidesOnDeactivate` (default `true`) suppressing the panel whenever another
   app was frontmost; panel is now `.screenSaver` level with `[.canJoinAllSpaces, .fullScreenAuxiliary]`.

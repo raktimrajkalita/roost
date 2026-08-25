@@ -139,10 +139,11 @@ final class SessionStore {
                 termProgram: (obj["term_program"] as? String) ?? "",
                 displayName: project
             )
-            if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }
+            s.tty = (obj["tty"] as? String) ?? ""
+            if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }   // iTerm session name
+            else if !s.tty.isEmpty, let name = names[s.tty] { s.displayName = name }      // Terminal.app custom title (rename)
             let fid = (f as NSString).deletingPathExtension
             s.muted = fm.fileExists(atPath: (muteDir as NSString).appendingPathComponent(fid))
-            s.tty = (obj["tty"] as? String) ?? ""
             out.append(s)
         }
 

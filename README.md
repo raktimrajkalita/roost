@@ -54,7 +54,7 @@ Roost is driven by Claude Code hooks, not by scraping any particular terminal, s
 | | iTerm2 | Terminal.app | others |
 |---|---|---|---|
 | Live status, chime, auto-drop, menu-bar count | yes | yes | yes |
-| Session name | your tab name | folder name | folder name |
+| Session name | your tab name | your custom title (else folder) | folder name |
 | Click a row to jump to its tab | yes (`unique id`) | yes (by `tty`) | raises the app |
 
 Click-to-jump dispatches on which terminal the session runs in: iTerm2 by its `unique id`, Terminal.app by the tab's `tty` (the reporter records it via `ps`, since that's the stable per-tab id Terminal.app exposes), and any other terminal is just brought to the front (no per-tab focus yet). Wiring up a new terminal is the same recipe: a stable per-tab id plus an AppleScript focus path. Contributions welcome.

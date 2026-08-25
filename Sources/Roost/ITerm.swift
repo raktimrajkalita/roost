@@ -5,33 +5,67 @@ import AppKit
 /// a session by its unique id. Runs off the main thread so it never blocks the UI.
 enum ITerm {
 
-    /// uuid -> cleaned tab name (status glyph and trailing "(node)" stripped)
+    /// Session display names: iTerm session names keyed by unique id (glyph + trailing
+    /// "(job)" stripped), plus Terminal.app custom titles (the user's rename) keyed by tty.
+    /// Both scripts are guarded by `is running` so a background refresh never launches a
+    /// terminal that's closed.
     static func fetchNames(_ completion: @escaping ([String: String]) -> Void) {
-        let script = """
+        let itermScript = """
         set d to tab
         set lf to linefeed
-        tell application "iTerm2"
-          set out to ""
-          repeat with w in windows
-            repeat with t in tabs of w
-              repeat with sess in sessions of t
-                set out to out & (unique id of sess) & d & (name of sess) & lf
+        set out to ""
+        if application "iTerm2" is running then
+          tell application "iTerm2"
+            repeat with w in windows
+              repeat with t in tabs of w
+                repeat with sess in sessions of t
+                  set out to out & (unique id of sess) & d & (name of sess) & lf
+                end repeat
               end repeat
             end repeat
-          end repeat
-          return out
-        end tell
+          end tell
+        end if
+        return out
         """
-        runAppleScript(script) { result in
+        let terminalScript = """
+        set d to tab
+        set lf to linefeed
+        set out to ""
+        if application "Terminal" is running then
+          tell application "Terminal"
+            repeat with w in windows
+              repeat with t in tabs of w
+                set ct to ""
+                try
+                  set ct to custom title of t
+                end try
+                if ct is not missing value and ct is not "" then
+                  set out to out & (tty of t) & d & ct & lf
+                end if
+              end repeat
+            end repeat
+          end tell
+        end if
+        return out
+        """
+        runAppleScript(itermScript) { itermOut in
             var map: [String: String] = [:]
-            for line in (result ?? "").split(separator: "\n") {
+            for line in (itermOut ?? "").split(separator: "\n") {          // iTerm: keyed by unique id
                 let parts = line.split(separator: "\t", maxSplits: 1)
-                guard parts.count == 2 else { continue }
-                if let name = clean(String(parts[1])) {
+                if parts.count == 2, let name = clean(String(parts[1])) {
                     map[String(parts[0])] = name
                 }
             }
-            DispatchQueue.main.async { completion(map) }
+            runAppleScript(terminalScript) { termOut in
+                for line in (termOut ?? "").split(separator: "\n") {       // Terminal: user's custom title, keyed by tty
+                    let parts = line.split(separator: "\t", maxSplits: 1)
+                    if parts.count == 2 {
+                        let title = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                        if !title.isEmpty { map[String(parts[0])] = title }
+                    }
+                }
+                DispatchQueue.main.async { completion(map) }
+            }
         }
     }
 
