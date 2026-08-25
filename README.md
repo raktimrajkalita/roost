@@ -23,7 +23,7 @@ I wanted something ambient: a single place, always in view, that tells me what e
 - **It grows out of the notch.** Open and close are a real spring animation — the panel expands from a notch-sized sliver into the full UI and collapses back into it. The top strip is absolute black so it fuses with the physical notch; the body below is real frosted glass.
 - **It comes to you.** When a session finishes, the panel drops for a few seconds and plays a short metallic chime — boosted if music or a video is already playing, so it cuts through.
 - **Your names, not folders.** Roost shows each session's **iTerm2 tab name** (the name Claude Code sets, e.g. "MYPROJ", "Aina Main"), falling back to the folder name only when a tab has none.
-- **Search everything.** The lens in the notch turns into a search field that reaches *every* session on disk — including ones that finished hours ago and dropped off the panel. Matches on session name, folder, or last action.
+- **Search everything.** The lens in the notch turns into a search field that reaches *every* session on disk — including ones that finished hours ago and dropped off the panel. Matches on session name, folder, or last action. Found one you want back? Hover it and hit **+** to keep it on the notch until you dismiss it again.
 - **Click to teleport.** Click a session and Roost focuses that exact iTerm2 tab — no more hunting.
 - **Per-session mute.** Each row has its own bell. Silence a chatty session without muting the rest.
 - **Refresh clears the noise.** The reload button wipes every finished row; they stay gone until a *new* completion comes in.

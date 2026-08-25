@@ -29,6 +29,7 @@ final class NotchModel: ObservableObject {
     var onFocus: (Session) -> Void = { _ in }
     var onMute: (String) -> Void = { _ in }
     var onDismiss: (String) -> Void = { _ in }
+    var onKeep: (String) -> Void = { _ in }       // pull a search result back onto the panel
     var onReload: () -> Void = { }
     var onSearchWillOpen: () -> Void = { }        // grow the window + take keys BEFORE anything animates
     var onSearchDidClose: () -> Void = { }        // collapse once the bar has retracted
@@ -116,7 +117,9 @@ struct NotchView: View {
                     ScrollView(.vertical, showsIndicators: true) {   // beyond 10, cap the height and scroll
                         VStack(spacing: 3) {
                             ForEach(model.rows) { s in
-                                RowView(session: s, onFocus: model.onFocus, onMute: model.onMute, onDismiss: model.onDismiss)
+                                RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
+                                        onDismiss: model.onDismiss, onKeep: model.onKeep,
+                                        offPanel: model.searching && !model.sessions.contains { $0.id == s.id })
                                 .transition(.asymmetric(
                                     insertion: .opacity.combined(with: .move(edge: .top)),
                                     removal: .move(edge: .trailing).combined(with: .opacity)))
@@ -127,7 +130,9 @@ struct NotchView: View {
                 } else {
                     VStack(spacing: 3) {
                         ForEach(model.rows) { s in
-                            RowView(session: s, onFocus: model.onFocus, onMute: model.onMute, onDismiss: model.onDismiss)
+                            RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
+                                        onDismiss: model.onDismiss, onKeep: model.onKeep,
+                                        offPanel: model.searching && !model.sessions.contains { $0.id == s.id })
                                 .transition(.asymmetric(
                                     insertion: .opacity.combined(with: .move(edge: .top)),
                                     removal: .move(edge: .trailing).combined(with: .opacity)))
@@ -285,6 +290,8 @@ struct RowView: View {
     var onFocus: (Session) -> Void
     var onMute: (String) -> Void
     var onDismiss: (String) -> Void
+    var onKeep: (String) -> Void = { _ in }
+    var offPanel: Bool = false          // a search hit that isn't on the panel right now
     @State private var hover = false
 
     // Actionable rows sit forward, working rows sit back — carried by the whole row, not just the dot.
@@ -335,14 +342,17 @@ struct RowView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        Button(action: { onDismiss(session.id) }) {   // hide it until this session next updates
-                            Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.55))
+                        // ✕ takes a row off the panel, so its inverse is +, not a pin —
+                        // "put this back", with no promise of permanence.
+                        Button(action: { offPanel ? onKeep(session.id) : onDismiss(session.id) }) {
+                            Image(systemName: offPanel ? "plus" : "xmark")
+                                .font(.system(size: offPanel ? 11 : 10, weight: .semibold))
+                                .foregroundColor(.white.opacity(offPanel ? 0.75 : 0.55))
                                 .frame(width: 22, height: 24)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .help(offPanel ? "Keep on the notch" : "Remove from the notch")
                     }
                 } else {
                     HStack(spacing: 4) {

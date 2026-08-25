@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.2 — quality of life (2026-08-25)
+
+- **Keep a search result on the notch.** Hovering a search hit that isn't currently on the panel
+  offers a **+** — the exact inverse of the ✕ that removes one. Deliberately not a pin: a pin
+  promises permanence this doesn't have. A kept session skips the 20-minute dormancy cutoff and
+  any earlier dismissal, and stays until you ✕ it or Roost restarts — the same in-memory contract
+  as everything else, so nothing accumulates on disk. ✕ always overrides a keep, and the button
+  flips to ✕ the moment the row lands on the panel.
+- **Click outside to dismiss.** While searching the panel is pinned open, so a click anywhere
+  outside it now exits search and collapses the panel entirely. Uses a global mouse monitor,
+  which by design only sees events bound for other apps — clicks inside the panel never fire it.
+- **👻 in the empty state**, with real layout spacing beside it (a word space renders tight
+  against an emoji).
+
 ## v2.1 — search + UI retouch (2026-08-25)
 
 ### Search

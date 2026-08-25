@@ -22,6 +22,7 @@ final class NotchController {
     private var prevDone = 0
     private var hideWork: DispatchWorkItem?
     private var layoutWork: DispatchWorkItem?
+    private var clickAway: Any?          // global mouse monitor while searching
 
     private let panelWidth: CGFloat = 380
     private let rowAnim: Double = 0.28        // row swipe-out; the window shrinks on the same clock
@@ -33,6 +34,7 @@ final class NotchController {
         model.onMute = { [weak self] id in self?.store.toggleMute(id: id) }
         model.onDismiss = { [weak self] id in self?.store.dismiss(id: id) }
         model.onReload = { [weak self] in self?.store.forceRefresh() }
+        model.onKeep = { [weak self] id in self?.store.keep(id: id) }
         model.searchFn = { [weak self] q in self?.store.search(q) ?? [] }
         model.onLayout = { [weak self] in self?.relayout() }
         model.onSearchWillOpen = { [weak self] in
@@ -48,9 +50,11 @@ final class NotchController {
             }
             NSApp.activate(ignoringOtherApps: true)         // an accessory app must activate to take keys
             self.panel.makeKeyAndOrderFront(nil)
+            self.startClickAway()
         }
         model.onSearchDidClose = { [weak self] in
             guard let self else { return }
+            self.stopClickAway()
             NSApp.deactivate()                              // hand focus back to whatever you were in
             self.layoutWork?.cancel()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {   // let the bar retract first
@@ -176,6 +180,37 @@ final class NotchController {
     }
 
     // MARK: hover loop
+
+    // MARK: click-away
+
+    /// While searching the panel is pinned, so a click anywhere outside it has to dismiss the
+    /// whole thing explicitly. A global monitor only sees events destined for OTHER apps, so
+    /// clicks inside our own panel never trigger it.
+    private func startClickAway() {
+        guard clickAway == nil else { return }
+        clickAway = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            [weak self] _ in self?.collapseFromSearch()
+        }
+    }
+
+    private func stopClickAway() {
+        if let m = clickAway { NSEvent.removeMonitor(m) }
+        clickAway = nil
+    }
+
+    /// Clicked outside: leave search and put the panel away entirely.
+    private func collapseFromSearch() {
+        guard model.searching else { return }
+        stopClickAway()
+        withAnimation(.easeOut(duration: 0.2)) {
+            model.searching = false
+            model.query = ""
+        }
+        NSApp.deactivate()
+        pinnedUntil = .distantPast
+        lastInside = .distantPast
+        hide()
+    }
 
     /// Re-measure the window after the rows or the search bar change.
     /// Coalesced, because every keystroke fires this and interrupting an in-flight window

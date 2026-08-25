@@ -51,6 +51,7 @@ final class SessionStore {
     private let muteDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/mutes")
     private var dismissedDoneBefore: Double = 0   // done rows finished before this are hidden (cleared by a refresh)
     private var dismissedBefore: [String: Double] = [:]   // per-session dismiss — hidden until its next update
+    private var keptIds: Set<String> = []                 // pulled back onto the panel from search
     private var pollTimer: Timer?
     private var names: [String: String] = [:]   // iTerm uuid -> cleaned tab name
 
@@ -79,9 +80,20 @@ final class SessionStore {
 
     /// Dismiss one session from the panel; it comes back the moment that session next updates.
     func dismiss(id: String) {
+        keptIds.remove(id)                                // ✕ overrides a keep
         dismissedBefore[id] = Date().timeIntervalSince1970
         reload()
     }
+
+    /// Pull a session back onto the panel from search — the inverse of dismiss. It's exempt from
+    /// the dormancy cutoff and from any earlier dismissal until you ✕ it or Roost restarts.
+    func keep(id: String) {
+        keptIds.insert(id)
+        dismissedBefore.removeValue(forKey: id)
+        reload()
+    }
+
+    func isKept(_ id: String) -> Bool { keptIds.contains(id) }
 
     /// Toggle the per-session mute flag the reporter checks before playing the chime.
     func toggleMute(id: String) {
@@ -155,10 +167,13 @@ final class SessionStore {
 
             everything.append(s)                                  // search sees every session, however old
 
-            // visibility filters — these only affect the panel list, never search
-            if now - updated > 20 * 60 { continue }               // drop dormant (>20 min)
-            if let d = dismissedBefore[f], updated <= d { continue }   // dismissed; back on its next update
-            if status == "done" && s.doneAt < dismissedDoneBefore { continue }   // a refresh cleared it
+            // visibility filters — these only affect the panel list, never search.
+            // A kept session skips them all: you asked for it explicitly.
+            if !keptIds.contains(f) {
+                if now - updated > 20 * 60 { continue }               // drop dormant (>20 min)
+                if let d = dismissedBefore[f], updated <= d { continue }   // dismissed; back on its next update
+                if status == "done" && s.doneAt < dismissedDoneBefore { continue }   // a refresh cleared it
+            }
             out.append(s)
         }
 
