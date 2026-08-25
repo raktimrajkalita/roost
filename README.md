@@ -51,13 +51,13 @@ The top of the panel is absolute black on purpose: it fuses with the physical no
 
 Roost is driven by Claude Code hooks, not by scraping any particular terminal, so the core works in **any terminal**: Terminal.app, iTerm2, the VS Code integrated terminal, Ghostty, Warp, and so on.
 
-| | iTerm2 | Terminal.app / others |
-|---|---|---|
-| Live status, chime, auto-drop, menu-bar count | yes | yes |
-| Session name | your iTerm2 tab name | folder name (fallback) |
-| Click a row to jump to its tab | yes | not yet |
+| | iTerm2 | Terminal.app | others |
+|---|---|---|---|
+| Live status, chime, auto-drop, menu-bar count | yes | yes | yes |
+| Session name | your tab name | folder name | folder name |
+| Click a row to jump to its tab | yes (`unique id`) | yes (by `tty`) | raises the app |
 
-Only click-to-jump is iTerm2-specific: it matches iTerm2's `unique id` via AppleScript. Adding it for Terminal.app is a small, contained change (record the tab's `tty` in the reporter, add an AppleScript focus-by-`tty` path, and dispatch on `term_program`). Contributions welcome.
+Click-to-jump dispatches on which terminal the session runs in: iTerm2 by its `unique id`, Terminal.app by the tab's `tty` (the reporter records it via `ps`, since that's the stable per-tab id Terminal.app exposes), and any other terminal is just brought to the front (no per-tab focus yet). Wiring up a new terminal is the same recipe: a stable per-tab id plus an AppleScript focus path. Contributions welcome.
 
 ## Install
 
