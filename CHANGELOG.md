@@ -30,6 +30,11 @@ packaged as a real double-clickable `Roost.app`.
 - Muted bell is white (was amber).
 
 ### Quality of life
+- **Works in any terminal:** hook-driven monitoring already ran everywhere; click-to-jump now
+  dispatches per terminal. iTerm2 uses its `unique id`, Terminal.app matches by `tty` (the reporter
+  records the tab's controlling tty via `ps`), and other terminals fall back to raising the app.
+- **Dismiss a row:** hover a row and click the ✕ to remove it; it comes back the moment that
+  session next updates (per-session, in-memory).
 - **Shows everywhere:** the auto-drop now appears on whatever Space is active and over fullscreen
   apps — fixed `NSPanel.hidesOnDeactivate` (default `true`) suppressing the panel whenever another
   app was frontmost; panel is now `.screenSaver` level with `[.canJoinAllSpaces, .fullScreenAuxiliary]`.

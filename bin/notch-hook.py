@@ -30,6 +30,30 @@ def read_payload():
         return {}
 
 
+def controlling_tty():
+    """The tab's tty (e.g. /dev/ttys005) — the stable per-tab id Terminal.app exposes
+    via AppleScript. `ps` reports this process's controlling terminal even when the
+    hook's stdio is piped; on macOS /dev/tty only names itself, so it can't be used."""
+    try:
+        out = subprocess.run(["ps", "-o", "tty=", "-p", str(os.getpid())],
+                             capture_output=True, text=True, timeout=2).stdout.strip()
+        if out and out not in ("?", "??", "-"):
+            if out.startswith("/dev/"):
+                return out
+            if out.startswith("tty"):
+                return "/dev/" + out         # ps gives "ttys005" -> /dev/ttys005
+            return "/dev/tty" + out          # some builds abbreviate as "s005"
+    except Exception:
+        pass
+    for fd in (0, 1, 2):                      # last resort if stdio happens to be a tty
+        try:
+            if os.isatty(fd):
+                return os.ttyname(fd)
+        except OSError:
+            pass
+    return ""
+
+
 def short_action(data):
     """Turn a PreToolUse payload into a line like 'Read app-sidebar.tsx'."""
     tool = data.get("tool_name") or "Working"
@@ -94,6 +118,49 @@ def play(sound):
         pass
 
 
+def _extract_text(content):
+    if isinstance(content, str):
+        return content.strip() or None
+    if isinstance(content, list):
+        parts = [b["text"] for b in content
+                 if isinstance(b, dict) and b.get("type") == "text" and b.get("text")]
+        t = " ".join(parts).strip()
+        return t or None
+    return None
+
+
+def last_assistant_text(path):
+    """Pull Claude's final reply text from the session transcript (JSONL).
+    Reads only the tail of the file so it's fast even on long sessions."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > 200000:                 # only need the last messages
+                f.seek(size - 200000)
+                f.readline()                  # drop the partial first line
+            blob = f.read().decode("utf-8", "replace")
+        last = None
+        for line in blob.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+            is_assistant = obj.get("type") == "assistant" or (isinstance(msg, dict) and msg.get("role") == "assistant")
+            if is_assistant and isinstance(msg, dict):
+                text = _extract_text(msg.get("content"))
+                if text:
+                    last = text
+        return last
+    except Exception:
+        return None
+
+
 def main():
     event = sys.argv[1] if len(sys.argv) > 1 else "working"
     data = read_payload()
@@ -129,6 +196,7 @@ def main():
         "iterm_session": os.environ.get("ITERM_SESSION_ID", ""),
         "term_session": os.environ.get("TERM_SESSION_ID", ""),
         "term_program": os.environ.get("TERM_PROGRAM", ""),
+        "tty": controlling_tty(),
         "updated": time.time(),
     })
 
@@ -143,6 +211,9 @@ def main():
     elif event == "done":
         state["status"] = "done"
         state["done_at"] = time.time()
+        reply = last_assistant_text(data.get("transcript_path"))
+        if reply:
+            state["last_action"] = "Claude: " + " ".join(reply.split())[:200]
         if not smuted:
             play("done.wav")   # the chime + notch panel are the notification (no macOS banner)
     elif event == "waiting":

@@ -27,8 +27,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func focus(_ sender: NSMenuItem) {
-        guard let uuid = sender.representedObject as? String else { return }
-        ITerm.focus(uuid: uuid)
+        guard let session = sender.representedObject as? Session else { return }
+        ITerm.focus(session: session)
     }
 }
 
@@ -45,7 +45,7 @@ extension AppController: NSMenuDelegate {
                 let title = "\(s.statusGlyph)  \(s.displayName)  —  \(s.lastAction)"
                 let item = NSMenuItem(title: title, action: #selector(focus(_:)), keyEquivalent: "")
                 item.target = self
-                item.representedObject = s.itermUUID
+                item.representedObject = s
                 menu.addItem(item)
             }
         }

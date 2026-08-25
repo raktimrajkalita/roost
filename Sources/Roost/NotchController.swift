@@ -21,8 +21,9 @@ final class NotchController {
     init(store: SessionStore) {
         self.store = store
         model.width = panelWidth
-        model.onFocus = { ITerm.focus(uuid: $0) }
+        model.onFocus = { ITerm.focus(session: $0) }
         model.onMute = { [weak self] id in self?.store.toggleMute(id: id) }
+        model.onDismiss = { [weak self] id in self?.store.dismiss(id: id) }
         model.onReload = { [weak self] in self?.store.forceRefresh() }
         buildPanel()
         refresh()

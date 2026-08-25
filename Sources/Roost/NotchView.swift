@@ -24,8 +24,9 @@ final class NotchModel: ObservableObject {
     @Published var expanded: Bool = false        // drives the grow-out-of-the-notch spring
     @Published var collapsedScaleX: CGFloat = 0.4    // notch width / full width  (set by controller)
     @Published var collapsedScaleY: CGFloat = 0.13   // notch height / full height (set by controller)
-    var onFocus: (String) -> Void = { _ in }
+    var onFocus: (Session) -> Void = { _ in }
     var onMute: (String) -> Void = { _ in }
+    var onDismiss: (String) -> Void = { _ in }
     var onReload: () -> Void = { }
 
     let flareW: CGFloat = 20     // top shoulders flare this far past each body wall
@@ -51,7 +52,7 @@ struct NotchView: View {
                     ScrollView(.vertical, showsIndicators: true) {   // beyond 10, cap the height and scroll
                         VStack(spacing: 3) {
                             ForEach(model.sessions) { s in
-                                RowView(session: s, onFocus: model.onFocus, onMute: model.onMute)
+                                RowView(session: s, onFocus: model.onFocus, onMute: model.onMute, onDismiss: model.onDismiss)
                             }
                         }
                     }
@@ -59,7 +60,7 @@ struct NotchView: View {
                 } else {
                     VStack(spacing: 3) {
                         ForEach(model.sessions) { s in
-                            RowView(session: s, onFocus: model.onFocus, onMute: model.onMute)
+                            RowView(session: s, onFocus: model.onFocus, onMute: model.onMute, onDismiss: model.onDismiss)
                         }
                     }
                 }
@@ -119,8 +120,9 @@ struct ReloadButton: View {
 
 struct RowView: View {
     let session: Session
-    var onFocus: (String) -> Void
+    var onFocus: (Session) -> Void
     var onMute: (String) -> Void
+    var onDismiss: (String) -> Void
     @State private var hover = false
 
     var body: some View {
@@ -149,6 +151,15 @@ struct RowView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            Button(action: { onDismiss(session.id) }) {          // remove from the notch; returns on its next update
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                    .frame(width: 22, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(hover ? 1 : 0)                               // reveal on row hover
         }
         .padding(.horizontal, 10)
         .frame(height: 46)
@@ -157,7 +168,7 @@ struct RowView: View {
         )
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture { if let u = session.itermUUID { onFocus(u) } }
+        .onTapGesture { onFocus(session) }
     }
 
 }

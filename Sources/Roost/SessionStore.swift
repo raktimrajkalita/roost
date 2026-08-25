@@ -9,6 +9,7 @@ struct Session: Identifiable {
     var updated: Double
     var itermSession: String
     var termProgram: String
+    var tty: String = ""    // controlling tty (e.g. /dev/ttys005) — Terminal.app's per-tab id
     var displayName: String // resolved iTerm tab name, or project
     var muted: Bool = false
 
@@ -36,6 +37,7 @@ final class SessionStore {
     private let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/state")
     private let muteDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/mutes")
     private var dismissedDoneBefore: Double = 0   // done rows finished before this are hidden (cleared by a refresh)
+    private var dismissedBefore: [String: Double] = [:]   // per-session dismiss — hidden until its next update
     private var pollTimer: Timer?
     private var names: [String: String] = [:]   // iTerm uuid -> cleaned tab name
 
@@ -60,6 +62,12 @@ final class SessionStore {
         dismissedDoneBefore = Date().timeIntervalSince1970
         reload()
         refreshNames()
+    }
+
+    /// Dismiss one session from the panel; it comes back the moment that session next updates.
+    func dismiss(id: String) {
+        dismissedBefore[id] = Date().timeIntervalSince1970
+        reload()
     }
 
     /// Toggle the per-session mute flag the reporter checks before playing the chime.
@@ -110,6 +118,7 @@ final class SessionStore {
 
             let updated = (obj["updated"] as? Double) ?? now
             if now - updated > 20 * 60 { continue }              // drop dormant (>20 min)
+            if let d = dismissedBefore[f], updated <= d { continue }   // user dismissed it; back on its next update
 
             var status = (obj["status"] as? String) ?? "idle"
             let lastAction = (obj["last_action"] as? String) ?? ""
@@ -133,6 +142,7 @@ final class SessionStore {
             if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }
             let fid = (f as NSString).deletingPathExtension
             s.muted = fm.fileExists(atPath: (muteDir as NSString).appendingPathComponent(fid))
+            s.tty = (obj["tty"] as? String) ?? ""
             out.append(s)
         }
 
