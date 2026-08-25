@@ -99,7 +99,7 @@ struct NotchView: View {
                 if model.rows.isEmpty {
                     Text(model.searching && !model.query.isEmpty
                          ? "no session matches “\(model.query)”"
-                         : "no active claude sessions")
+                         : "👻 no active claude sessions")
                         .font(.system(size: 12.5))
                         .foregroundColor(.white.opacity(0.4))
                         .lineLimit(1)
