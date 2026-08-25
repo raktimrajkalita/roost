@@ -565,24 +565,25 @@ struct StatusIndicator: View {
     }
 }
 
-/// thinking — a low travelling wave. Each dot rides the same sine, offset by its position,
-/// so the motion passes through the row left to right instead of the cluster pulsing in place.
+/// thinking — nine dots on a phyllotaxis spiral: golden angle 137.5°, radius √n,
+/// each breathing on a staggered phase. Dispersed = working.
 struct BloomIndicator: View {
     var color: Color
     var body: some View {
         TimelineView(.animation) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in
-                let w = Double(size.width), h = Double(size.height)
-                let n = 5
-                let r = 1.45
-                let amp = h * 0.16                       // deliberately shallow — it should read as drift
+                let R = Double(min(size.width, size.height)) / 2 * 0.92
+                let cx = Double(size.width) / 2, cy = Double(size.height) / 2
+                let n = 9, ga = 2.399963
+                let spin = 2 * Double.pi * 0.0525 * t                     // 5% quicker
                 for i in 0..<n {
-                    let f = Double(i) / Double(n - 1)     // 0…1 across the width
-                    let x = r + 0.8 + f * (w - 2 * (r + 0.8))
-                    let s = sin(2 * Double.pi * (f * 1.0 - t * 0.55))
-                    let y = h / 2 + amp * s
-                    ctx.opacity = 0.5 + 0.5 * (0.5 + 0.5 * s)   // crests read a touch brighter
+                    let a = Double(i) * ga + spin
+                    let rad = R * 0.95 * (Double(i) / Double(n - 1)).squareRoot()
+                    let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.4725 * t - Double(i) * 0.55)
+                    let r = R * 0.15 * (0.65 + 0.5 * p)
+                    let x = cx + cos(a) * rad, y = cy + sin(a) * rad * 0.8
+                    ctx.opacity = 0.3 + 0.7 * p
                     ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
                              with: .color(color))
                 }

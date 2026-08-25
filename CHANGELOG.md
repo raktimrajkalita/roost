@@ -12,10 +12,9 @@
   but the cap applied even once the updater reported 100 — so a surviving instance sat there
   forever. It now finishes and clears itself.
 
-- **Thinking is a travelling wave.** Five dots riding one sine, each phase-offset by its position,
-  so the crest moves through the row instead of the cluster pulsing in place. Deliberately shallow
-  — the amplitude is 16% of the row height, so it reads as drift rather than a bounce. The update
-  banner's indicator inherits it.
+- **The bottom glow travels.** It's masked by a moving sine across the panel's width, so the light
+  runs along the bottom edge rather than pulsing uniformly in place, and the breath is 5% quicker.
+  The row indicator stays Bloom — the wave was only ever meant for the glow.
 
 - **The build no longer depends on SwiftPM working.** On beta macOS, or when Xcode and the
   Command Line Tools disagree, `swift build` can fail while compiling `Package.swift` itself —
