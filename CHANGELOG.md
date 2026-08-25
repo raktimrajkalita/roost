@@ -2,6 +2,11 @@
 
 ## v2.2 — quality of life (2026-08-25)
 
+- **Thinking is a travelling wave.** Five dots riding one sine, each phase-offset by its position,
+  so the crest moves through the row instead of the cluster pulsing in place. Deliberately shallow
+  — the amplitude is 16% of the row height, so it reads as drift rather than a bounce. The update
+  banner's indicator inherits it.
+
 - **The build no longer depends on SwiftPM working.** On beta macOS, or when Xcode and the
   Command Line Tools disagree, `swift build` can fail while compiling `Package.swift` itself —
   before it ever reaches the sources. Roost has no dependencies, so `build-app.sh` now falls
