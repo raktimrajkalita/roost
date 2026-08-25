@@ -2,6 +2,13 @@
 
 ## v2.2 — quality of life (2026-08-25)
 
+- **Roost burned ~30% CPU while its panel was hidden.** Every status indicator drove a
+  `TimelineView(.animation)`, which redraws at display refresh for as long as it exists —
+  including with the window off screen. One per session, plus the bottom glow rebuilding a
+  15-stop gradient every frame. Worst of all, a finished row is visually static after 0.66s but
+  kept animating for the life of the app. All of it is now gated on visibility, and Settle stops
+  once it has landed. Measured hidden: **27–32% → 0.4%**.
+
 - **Terminal.app click-to-jump landed on the wrong window.** The focus script set the tab, raised
   its window, and *then* also set `index of w to 1`. That reorder fights `frontmost` and lands on
   the previously focused window. With six windows open the old script scored 6/12; setting the

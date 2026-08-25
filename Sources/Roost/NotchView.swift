@@ -123,7 +123,7 @@ struct NotchView: View {
                         removal: .move(edge: .top).combined(with: .opacity)))
             }
             if model.update != .none {
-                UpdateBanner(state: model.update,
+                UpdateBanner(state: model.update, animate: model.expanded,
                              onUpdate: model.onUpdateNow,
                              onDismiss: model.onUpdateDismiss)
                     .padding(.horizontal, 8 + model.flareW)
@@ -154,7 +154,8 @@ struct NotchView: View {
                             ForEach(model.rows) { s in
                                 RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
                                         onDismiss: model.onDismiss, onKeep: model.onKeep,
-                                        offPanel: model.searching && !model.sessions.contains { $0.id == s.id })
+                                        offPanel: model.searching && !model.sessions.contains { $0.id == s.id },
+                                        animate: model.expanded)
                                 .transition(.asymmetric(
                                     insertion: .opacity.combined(with: .move(edge: .top)),
                                     removal: .move(edge: .trailing).combined(with: .opacity)))
@@ -167,7 +168,8 @@ struct NotchView: View {
                         ForEach(model.rows) { s in
                             RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
                                         onDismiss: model.onDismiss, onKeep: model.onKeep,
-                                        offPanel: model.searching && !model.sessions.contains { $0.id == s.id })
+                                        offPanel: model.searching && !model.sessions.contains { $0.id == s.id },
+                                        animate: model.expanded)
                                 .transition(.asymmetric(
                                     insertion: .opacity.combined(with: .move(edge: .top)),
                                     removal: .move(edge: .trailing).combined(with: .opacity)))
@@ -198,7 +200,7 @@ struct NotchView: View {
             // Its colour and motion report the state of the whole panel at a glance.
             .overlay(alignment: .bottom) {
                 Group {
-                    if glow.breathing {
+                    if glow.breathing && model.expanded {
                         TimelineView(.animation) { tl in
                             let t = tl.date.timeIntervalSinceReferenceDate
                             let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.315 * t)  // ~3.2s breath, 5% quicker
@@ -247,6 +249,7 @@ struct NotchView: View {
 /// right — so it reads as part of the panel rather than a notification bolted on.
 struct UpdateBanner: View {
     let state: UpdateState
+    var animate: Bool = true
     var onUpdate: () -> Void
     var onDismiss: () -> Void
     @State private var hoverGo = false
@@ -281,7 +284,7 @@ struct UpdateBanner: View {
             Group {
                 switch state {
                 case .checking, .installing:
-                    BloomIndicator(color: accent)          // the same working animation as a session
+                    BloomIndicator(color: accent, animate: animate)          // the same working animation as a session
                 case .installed:
                     Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
                         .foregroundColor(statusColor("done"))
@@ -432,6 +435,7 @@ struct RowView: View {
     var onDismiss: (String) -> Void
     var onKeep: (String) -> Void = { _ in }
     var offPanel: Bool = false          // a search hit that isn't on the panel right now
+    var animate: Bool = true            // false while the panel is off screen
     @State private var hover = false
 
     // Actionable rows sit forward, working rows sit back — carried by the whole row, not just the dot.
@@ -456,7 +460,7 @@ struct RowView: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            StatusIndicator(status: session.status, doneAt: session.doneAt)
+            StatusIndicator(status: session.status, doneAt: session.doneAt, animate: animate)
                 .frame(width: 18, height: 14)
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.displayName)
@@ -551,14 +555,15 @@ func relativeAge(_ session: Session, now: Date) -> String {
 struct StatusIndicator: View {
     let status: String
     var doneAt: Double = 0
+    var animate: Bool = true
     var body: some View {
         switch status {
         case "thinking":
-            BloomIndicator(color: statusColor(status))
+            BloomIndicator(color: statusColor(status), animate: animate)
         case "waiting":
-            PulseDot(color: statusColor(status))
+            PulseDot(color: statusColor(status), animate: animate)
         case "done":
-            SettleIndicator(color: statusColor(status), doneAt: doneAt)
+            SettleIndicator(color: statusColor(status), doneAt: doneAt, animate: animate)
         default:
             Circle().fill(statusColor(status)).frame(width: 8, height: 8)
         }
@@ -569,24 +574,34 @@ struct StatusIndicator: View {
 /// each breathing on a staggered phase. Dispersed = working.
 struct BloomIndicator: View {
     var color: Color
+    var animate: Bool = true
+
+    // A TimelineView redraws at display refresh for as long as it exists — including while the
+    // panel is off screen. One per row adds up to a permanent CPU burn for pixels nobody sees,
+    // so when it's not visible we draw a single frozen frame instead.
     var body: some View {
-        TimelineView(.animation) { tl in
-            let t = tl.date.timeIntervalSinceReferenceDate
-            Canvas { ctx, size in
-                let R = Double(min(size.width, size.height)) / 2 * 0.92
-                let cx = Double(size.width) / 2, cy = Double(size.height) / 2
-                let n = 9, ga = 2.399963
-                let spin = 2 * Double.pi * 0.0525 * t                     // 5% quicker
-                for i in 0..<n {
-                    let a = Double(i) * ga + spin
-                    let rad = R * 0.95 * (Double(i) / Double(n - 1)).squareRoot()
-                    let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.4725 * t - Double(i) * 0.55)
-                    let r = R * 0.15 * (0.65 + 0.5 * p)
-                    let x = cx + cos(a) * rad, y = cy + sin(a) * rad * 0.8
-                    ctx.opacity = 0.3 + 0.7 * p
-                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
-                             with: .color(color))
-                }
+        if animate {
+            TimelineView(.animation) { tl in frame(tl.date.timeIntervalSinceReferenceDate) }
+        } else {
+            frame(0)
+        }
+    }
+
+    private func frame(_ t: Double) -> some View {
+        Canvas { ctx, size in
+            let R = Double(min(size.width, size.height)) / 2 * 0.92
+            let cx = Double(size.width) / 2, cy = Double(size.height) / 2
+            let n = 9, ga = 2.399963
+            let spin = 2 * Double.pi * 0.0525 * t                     // 5% quicker
+            for i in 0..<n {
+                let a = Double(i) * ga + spin
+                let rad = R * 0.95 * (Double(i) / Double(n - 1)).squareRoot()
+                let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.4725 * t - Double(i) * 0.55)
+                let r = R * 0.15 * (0.65 + 0.5 * p)
+                let x = cx + cos(a) * rad, y = cy + sin(a) * rad * 0.8
+                ctx.opacity = 0.3 + 0.7 * p
+                ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
+                         with: .color(color))
             }
         }
     }
@@ -595,16 +610,22 @@ struct BloomIndicator: View {
 /// waiting — a single dot, pulsing. Blocked on you.
 struct PulseDot: View {
     var color: Color
+    var animate: Bool = true
     var body: some View {
-        TimelineView(.animation) { tl in
-            let t = tl.date.timeIntervalSinceReferenceDate
-            let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.8 * t)
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-                .scaleEffect(0.80 + 0.28 * p)
-                .opacity(0.42 + 0.58 * p)
+        if animate {
+            TimelineView(.animation) { tl in dot(tl.date.timeIntervalSinceReferenceDate) }
+        } else {
+            dot(0)
         }
+    }
+
+    private func dot(_ t: Double) -> some View {
+        let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.8 * t)
+        return Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .scaleEffect(0.80 + 0.28 * p)
+            .opacity(0.42 + 0.58 * p)
     }
 }
 
@@ -613,23 +634,36 @@ struct PulseDot: View {
 struct SettleIndicator: View {
     var color: Color
     var doneAt: Double
+    var animate: Bool = true
+
+    /// It resolves in 0.66s and then never moves again. A done row that keeps a timeline alive
+    /// for the life of the app is the most expensive thing in the panel — there are usually
+    /// several, and they're all drawing an identical frame forever.
+    private var settled: Bool { Date().timeIntervalSince1970 - doneAt > 0.7 }
+
     var body: some View {
-        TimelineView(.animation) { tl in
-            let now = tl.date.timeIntervalSince1970
-            let u = min(1, max(0, (now - doneAt) / 0.66))
-            let e = 1 - pow(1 - u, 3)                       // easeOutCubic
-            Canvas { ctx, size in
-                let R = Double(min(size.width, size.height)) / 2 * 0.92
-                let cx = Double(size.width) / 2, cy = Double(size.height) / 2
-                let hr = R * (1.25 - 0.45 * e)              // halo, contracting
-                ctx.opacity = 0.30 * (1 - e) + 0.15
-                ctx.stroke(Path(ellipseIn: CGRect(x: cx - hr, y: cy - hr, width: hr * 2, height: hr * 2)),
-                           with: .color(color), lineWidth: max(R * 0.13, 0.5))
-                let cr = R * (0.20 + 0.28 * e)              // core, settling
-                ctx.opacity = 1
-                ctx.fill(Path(ellipseIn: CGRect(x: cx - cr, y: cy - cr, width: cr * 2, height: cr * 2)),
-                         with: .color(color))
+        if animate && !settled {
+            TimelineView(.animation) { tl in
+                halo(min(1, max(0, (tl.date.timeIntervalSince1970 - doneAt) / 0.66)))
             }
+        } else {
+            halo(1)
+        }
+    }
+
+    private func halo(_ u: Double) -> some View {
+        let e = 1 - pow(1 - u, 3)                           // easeOutCubic
+        return Canvas { ctx, size in
+            let R = Double(min(size.width, size.height)) / 2 * 0.92
+            let cx = Double(size.width) / 2, cy = Double(size.height) / 2
+            let hr = R * (1.25 - 0.45 * e)                  // halo, contracting
+            ctx.opacity = 0.30 * (1 - e) + 0.15
+            ctx.stroke(Path(ellipseIn: CGRect(x: cx - hr, y: cy - hr, width: hr * 2, height: hr * 2)),
+                       with: .color(color), lineWidth: max(R * 0.13, 0.5))
+            let cr = R * (0.20 + 0.28 * e)                  // core, settling
+            ctx.opacity = 1
+            ctx.fill(Path(ellipseIn: CGRect(x: cx - cr, y: cy - cr, width: cr * 2, height: cr * 2)),
+                     with: .color(color))
         }
     }
 }
