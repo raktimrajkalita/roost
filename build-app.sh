@@ -17,8 +17,21 @@ if [ ! -f icon/Roost.icns ]; then
 fi
 
 # 2. build
+# SwiftPM compiles Package.swift itself before it touches any source, linking that against the
+# toolchain's PackageDescription. On a machine where the active SDK doesn't match the Swift
+# version (beta macOS, stale Command Line Tools, xcode-select pointing at the wrong Xcode) that
+# manifest step fails before the build even starts. Roost has no dependencies, so when that
+# happens we skip SwiftPM entirely and compile the sources directly.
 echo "[*] building ${CONFIG}"
-swift build -c "${CONFIG}"
+if ! swift build -c "${CONFIG}"; then
+    echo
+    echo "[!] swift build failed — falling back to a direct swiftc compile"
+    echo "    (this usually means the SDK and the Swift toolchain disagree; check"
+    echo "     'xcode-select -p' and 'xcrun --show-sdk-version')"
+    mkdir -p "$(dirname "${BIN}")"
+    swiftc -O -target "$(uname -m)-apple-macosx13.0" -o "${BIN}" Sources/Roost/*.swift
+    echo "[ok] direct compile succeeded"
+fi
 
 # 3. assemble the bundle
 echo "[*] assembling ${APP}"

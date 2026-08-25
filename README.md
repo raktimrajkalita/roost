@@ -85,6 +85,26 @@ swift build && ./.build/debug/Roost
 
 `ROOST_PREVIEW=<seconds> ./.build/debug/Roost` holds the panel open at launch so you can see it (default 3s).
 
+## If the build fails on an SDK mismatch
+
+On beta macOS, or when Xcode and the Command Line Tools disagree, `swift build` can die with something like *"targets macosx26.0 but links against the macosx14.0 SDK"*.
+
+**That failure isn't in Roost's code.** Before SwiftPM builds anything it compiles `Package.swift` itself and links it against the toolchain's `PackageDescription` — and it's that step that breaks when the active SDK doesn't match the Swift version. It never reaches the sources. (It's also unrelated to `.macOS(.v13)` in the manifest: that's the *deployment target*, the oldest OS the finished app runs on, not the SDK used to compile it.)
+
+`build-app.sh` handles this on its own: if `swift build` fails it falls back to compiling the sources directly with `swiftc`, skipping the manifest entirely. Roost has no dependencies, so nothing is lost.
+
+To fix the toolchain properly:
+
+```bash
+xcode-select -p              # which developer dir is active
+xcrun --show-sdk-version     # should roughly match your macOS major version
+
+# point at a full Xcode…
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+# …or reinstall the Command Line Tools
+sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install
+```
+
 ## Sharing Roost.app with someone else
 
 The build is **ad-hoc signed**, which runs perfectly on *your* Mac but is not notarized, so another Mac's Gatekeeper will warn on first open. Notarization needs a paid Apple Developer account ($99/yr); until then, any of these work for free:

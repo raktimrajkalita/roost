@@ -2,6 +2,12 @@
 
 ## v2.2 — quality of life (2026-08-25)
 
+- **The build no longer depends on SwiftPM working.** On beta macOS, or when Xcode and the
+  Command Line Tools disagree, `swift build` can fail while compiling `Package.swift` itself —
+  before it ever reaches the sources. Roost has no dependencies, so `build-app.sh` now falls
+  back to compiling directly with `swiftc`, and the README explains how to fix the toolchain
+  properly.
+
 - **The panel no longer dips as it opens.** The grow spring was under-damped, so it overshot its
   final height and settled back — with the top anchored, that rebound read as the panel dropping
   and then re-aligning. It's near-critically damped now, and the same motion runs in reverse on
