@@ -259,6 +259,14 @@ final class NotchController {
                     return
                 }
                 self.pinnedUntil = Date().addingTimeInterval(30)
+                if p >= 100 {                             // finished; normally we're killed before
+                    t.invalidate()                        // this, but if we survive, don't sit at 99
+                    self.model.update = .installing(100)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        self.setUpdate(.none)
+                    }
+                    return
+                }
                 if p != self.realPct { self.realPct = p; self.stepStart = Date() }
                 // A release build is whole-module, so one [N/M] step does most of the work and
                 // the bar would sit still for a minute. Ease toward the next milestone while a

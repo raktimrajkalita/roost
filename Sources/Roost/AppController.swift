@@ -5,7 +5,20 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let store = SessionStore()
     private var notch: NotchController!
 
+    /// Only ever one Roost. An update swaps the bundle underneath a running copy, and if the old
+    /// process outlives the swap you get two panels stacked on the notch — the stale one still
+    /// polling its progress file and still reporting its old commit as out of date.
+    private func terminateOtherInstances() {
+        guard let id = Bundle.main.bundleIdentifier else { return }   // raw binary: nothing to dedupe
+        let mine = NSRunningApplication.current.processIdentifier
+        for other in NSRunningApplication.runningApplications(withBundleIdentifier: id)
+        where other.processIdentifier != mine {
+            other.forceTerminate()                                    // newest launch wins
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        terminateOtherInstances()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "🪺"
 

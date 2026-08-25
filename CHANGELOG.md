@@ -2,6 +2,16 @@
 
 ## v2.2 — quality of life (2026-08-25)
 
+- **Updating left two copies running.** `build-app.sh --install` killed Roost but only unloaded
+  the launchd job twenty lines later, so launchd still owned the job during the swap and could
+  respawn the old build — then `launchctl load` started another. It now unloads first, kills,
+  and waits for the process to actually exit (escalating to SIGKILL) before swapping the bundle.
+  The app also terminates any other instance of itself at launch, so a stale copy can never
+  stack a second panel on the notch.
+- **Progress stuck at 99%.** The eased value was capped at 99 to avoid claiming completion early,
+  but the cap applied even once the updater reported 100 — so a surviving instance sat there
+  forever. It now finishes and clears itself.
+
 - **Thinking is a travelling wave.** Five dots riding one sine, each phase-offset by its position,
   so the crest moves through the row instead of the cluster pulsing in place. Deliberately shallow
   — the amplitude is 16% of the row height, so it reads as drift rather than a bounce. The update

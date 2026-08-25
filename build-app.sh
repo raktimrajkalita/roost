@@ -64,11 +64,26 @@ echo "[ok] built ${APP}"
 # 5. optional install
 if [ "${1:-}" = "--install" ]; then
     echo "[*] installing to /Applications"
+    PLIST="${HOME}/Library/LaunchAgents/com.raktim.roost.plist"
+
+    # Order matters. Unload launchd FIRST so it can't respawn the old build while we're
+    # swapping the bundle, then kill, then WAIT for the process to actually exit. Killing
+    # before unloading is what left an old instance alive next to the new one.
+    launchctl unload "${PLIST}" 2>/dev/null || true
     pkill -x Roost 2>/dev/null || true
+    for _ in $(seq 1 25); do
+        pgrep -x Roost >/dev/null 2>&1 || break
+        sleep 0.2
+    done
+    if pgrep -x Roost >/dev/null 2>&1; then
+        echo "[!] Roost didn't exit on SIGTERM — forcing"
+        pkill -9 -x Roost 2>/dev/null || true
+        sleep 0.3
+    fi
+
     rm -rf /Applications/Roost.app
     cp -R "${APP}" /Applications/Roost.app
 
-    PLIST="${HOME}/Library/LaunchAgents/com.raktim.roost.plist"
     echo "[*] installing login item -> ${PLIST}"
     mkdir -p "${HOME}/Library/LaunchAgents"
     cat > "${PLIST}" <<'PL'
@@ -84,8 +99,7 @@ if [ "${1:-}" = "--install" ]; then
 </dict>
 </plist>
 PL
-    launchctl unload "${PLIST}" 2>/dev/null || true
-    launchctl load  "${PLIST}"
+    launchctl load "${PLIST}"
     echo "[ok] installed. Roost is running and will start at login."
     echo "     remove login item:  launchctl unload \"${PLIST}\" && rm \"${PLIST}\""
 fi
