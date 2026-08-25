@@ -2,6 +2,13 @@
 
 ## v2.2 — quality of life (2026-08-25)
 
+- **The panel no longer dips as it opens.** The grow spring was under-damped, so it overshot its
+  final height and settled back — with the top anchored, that rebound read as the panel dropping
+  and then re-aligning. It's near-critically damped now, and the same motion runs in reverse on
+  close: out of a notch-sized sliver in both axes, and back into it the same way, strictly
+  top-pinned throughout. Pending window resizes are cancelled on show and hide so a queued one
+  can't shift the frame mid-animation.
+
 - **Keep a search result on the notch.** Hovering a search hit that isn't currently on the panel
   offers a **+** — the exact inverse of the ✕ that removes one. Deliberately not a pin: a pin
   promises permanence this doesn't have. A kept session skips the 20-minute dormancy cutoff and

@@ -158,6 +158,7 @@ final class NotchController {
 
     private func show() {
         hideWork?.cancel(); hideWork = nil
+        layoutWork?.cancel()                     // no window animation while the panel springs open
         updateContent()
         panel.setFrame(panelFrame(), display: true, animate: false)   // full-size window; SwiftUI does the grow
         panel.alphaValue = 1
@@ -170,7 +171,8 @@ final class NotchController {
 
     private func hide() {
         visible = false
-        model.expanded = false                   // springs closed back into the notch
+        layoutWork?.cancel()                     // don't resize the window mid-collapse
+        model.expanded = false
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.visible == false else { return }
             self.panel.orderOut(nil)

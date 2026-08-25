@@ -178,12 +178,14 @@ struct NotchView: View {
         )
         .clipShape(NotchPanelShape(flareW: model.flareW, flareH: model.flareH, bottomR: 26))
         .onChange(of: model.query) { _ in model.onLayout() }
-        // grow out of the notch: collapsed = a notch-sized sliver pinned top-centre; expanded = full panel
+        // Grows out of a notch-sized sliver in both axes and retracts back into it the same way.
+        // Anchored top, and near-critically damped so it never overshoots its final height and
+        // settles back — that rebound reads as the panel dropping and then re-aligning.
         .scaleEffect(x: model.expanded ? 1 : model.collapsedScaleX,
                      y: model.expanded ? 1 : model.collapsedScaleY,
                      anchor: .top)
         .opacity(model.expanded ? 1 : 0)
-        .animation(.spring(response: 0.36, dampingFraction: 0.80), value: model.expanded)
+        .animation(.spring(response: 0.34, dampingFraction: 0.94), value: model.expanded)
         // the window may be taller than the panel (it only grows while searching, never shrinks),
         // so keep the panel itself hugging the notch instead of centring in the leftover space
         .frame(maxHeight: .infinity, alignment: .top)
