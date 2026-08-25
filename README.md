@@ -47,9 +47,21 @@ Claude Code hooks ──▶ reporter (python) ──▶ ~/.claude-notch/state/*.
 
 The top of the panel is absolute black on purpose: it fuses with the physical notch and hides it, so it reads as the notch *growing* downward rather than a floating window.
 
+## Terminal support
+
+Roost is driven by Claude Code hooks, not by scraping any particular terminal, so the core works in **any terminal**: Terminal.app, iTerm2, the VS Code integrated terminal, Ghostty, Warp, and so on.
+
+| | iTerm2 | Terminal.app / others |
+|---|---|---|
+| Live status, chime, auto-drop, menu-bar count | yes | yes |
+| Session name | your iTerm2 tab name | folder name (fallback) |
+| Click a row to jump to its tab | yes | not yet |
+
+Only click-to-jump is iTerm2-specific: it matches iTerm2's `unique id` via AppleScript. Adding it for Terminal.app is a small, contained change (record the tab's `tty` in the reporter, add an AppleScript focus-by-`tty` path, and dispatch on `term_program`). Contributions welcome.
+
 ## Install
 
-**Requirements:** macOS 13+, the Xcode **Command Line Tools** (`xcode-select --install` — no full Xcode needed), [iTerm2](https://iterm2.com), Python 3 (ships with macOS), and [Claude Code](https://claude.com/claude-code). A notch is nice but not required — the panel just drops from the top center.
+**Requirements:** macOS 13+, the Xcode **Command Line Tools** (`xcode-select --install` — no full Xcode needed), Python 3 (ships with macOS), and [Claude Code](https://claude.com/claude-code). [iTerm2](https://iterm2.com) is recommended but optional; any terminal works with reduced features (see [Terminal support](#terminal-support)). A notch is nice but not required — the panel just drops from the top center.
 
 ```bash
 git clone https://github.com/raktimrajkalita/roost.git
