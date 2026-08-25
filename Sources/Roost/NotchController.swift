@@ -24,6 +24,9 @@ final class NotchController {
     private var layoutWork: DispatchWorkItem?
     private var clickAway: Any?          // global mouse monitor while searching
     private var updatePoll: Timer?       // reads the updater's progress file
+    private var realPct = 0              // last milestone the updater actually reported
+    private var stepStart = Date()       // when that milestone landed
+    private var shownPct = 0             // eased, monotonic value on screen
 
     private let panelWidth: CGFloat = 380
     private let rowAnim: Double = 0.28        // row swipe-out; the window shrinks on the same clock
@@ -238,6 +241,7 @@ final class NotchController {
             return
         }
         try? FileManager.default.removeItem(atPath: Updater.progressPath)
+        realPct = 0; shownPct = 0; stepStart = Date()
         setUpdate(.installing(0))
         pinnedUntil = Date().addingTimeInterval(180)     // keep it on screen through the rebuild
         if !visible { show() }
@@ -255,8 +259,17 @@ final class NotchController {
                     return
                 }
                 self.pinnedUntil = Date().addingTimeInterval(30)
-                if case .installing(let cur) = self.model.update, cur == p { return }
-                self.model.update = .installing(p)
+                if p != self.realPct { self.realPct = p; self.stepStart = Date() }
+                // A release build is whole-module, so one [N/M] step does most of the work and
+                // the bar would sit still for a minute. Ease toward the next milestone while a
+                // step runs — motion without ever claiming ground we haven't actually taken.
+                let cap = p >= 85 ? p : min(84, p + 45)
+                let dt = Date().timeIntervalSince(self.stepStart)
+                let eased = Double(p) + (Double(cap) - Double(p)) * (1 - exp(-dt / 14))
+                let show = max(self.shownPct, min(Int(eased), 99))
+                guard show != self.shownPct else { return }
+                self.shownPct = show
+                self.model.update = .installing(show)
             }
         }
     }
@@ -265,9 +278,11 @@ final class NotchController {
     private func showInstalledIfJustUpdated() {
         let f = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/updated")
         guard FileManager.default.fileExists(atPath: f) else { return }
+        // the marker is consumed here, so this only ever shows once per update; it then waits
+        // for the ✕ rather than timing out, and dismissing it is final
         try? FileManager.default.removeItem(atPath: f)
         pinnedUntil = Date().addingTimeInterval(5)
-        setUpdate(.installed, clearAfter: 5)
+        setUpdate(.installed)
     }
 
     // MARK: click-away

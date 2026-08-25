@@ -269,6 +269,13 @@ struct UpdateBanner: View {
         return nil
     }
 
+    /// The two states that wait for you rather than clearing themselves.
+    private var dismissible: Bool {
+        if case .available = state { return true }
+        if case .installed = state { return true }
+        return false
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Group {
@@ -304,6 +311,8 @@ struct UpdateBanner: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { hoverGo = $0 }
+            }
+            if dismissible {                     // available, and the post-update confirmation
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9.5, weight: .semibold))
