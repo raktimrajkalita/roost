@@ -23,6 +23,7 @@ final class NotchController {
     private var hideWork: DispatchWorkItem?
     private var layoutWork: DispatchWorkItem?
     private var clickAway: Any?          // global mouse monitor while searching
+    private var updatePoll: Timer?       // reads the updater's progress file
 
     private let panelWidth: CGFloat = 380
     private let rowAnim: Double = 0.28        // row swipe-out; the window shrinks on the same clock
@@ -61,8 +62,18 @@ final class NotchController {
                 self.relayout(allowShrink: true)
             }
         }
+        model.onUpdateNow = { [weak self] in self?.startUpdate() }
+        model.onUpdateDismiss = { [weak self] in self?.setUpdate(.none) }
         buildPanel()
         refresh()
+        showInstalledIfJustUpdated()
+        // quiet check shortly after launch, then daily
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            self?.checkForUpdates(announce: false)
+        }
+        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+            self?.checkForUpdates(announce: false)
+        }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.09, repeats: true) { [weak self] _ in self?.tick() }
         // brief preview at launch so it's obvious it renders; then normal hover/auto-drop
         let preview = Double(ProcessInfo.processInfo.environment["ROOST_PREVIEW"] ?? "3") ?? 3
@@ -105,7 +116,8 @@ final class NotchController {
         let shown = min(count, 10)                                 // cap the panel at 10 rows; the rest scrolls
         let body = count == 0 ? 46 : (CGFloat(shown) * rowH + 16)
         let searchBar: CGFloat = (searchOverride ?? model.searching) ? 44 : 0
-        let total = notchHeight + searchBar + body
+        let banner: CGFloat = model.update == .none ? 0 : (model.searching ? 42 : 50)
+        let total = notchHeight + searchBar + banner + body
         let W = model.width + model.flareW * 2            // body + the two top shoulders
         return CGRect(x: f.midX - W / 2, y: f.maxY - total, width: W, height: total)
     }
@@ -182,6 +194,81 @@ final class NotchController {
     }
 
     // MARK: hover loop
+
+    // MARK: updates — surfaced in the panel, never in a modal
+
+    /// `announce` shows "checking"/"up to date" too; the silent background poll only speaks
+    /// up when there's actually something to install.
+    func checkForUpdates(announce: Bool) {
+        if announce {
+            setUpdate(.checking)
+            pinnedUntil = Date().addingTimeInterval(6)
+            if !visible { show() }
+        }
+        Updater.check { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure:
+                if announce { self.setUpdate(.upToDate, clearAfter: 3) }   // don't nag about network trouble
+            case .success(nil):
+                if announce { self.setUpdate(.upToDate, clearAfter: 3) }
+            case .success(.some(let u)):
+                self.setUpdate(.available(u.count))
+                self.pinnedUntil = Date().addingTimeInterval(5)
+                if !self.visible { self.show() }
+            }
+        }
+    }
+
+    private func setUpdate(_ s: UpdateState, clearAfter: Double? = nil) {
+        withAnimation(.easeInOut(duration: 0.24)) { model.update = s }
+        relayout(allowShrink: true)
+        if let t = clearAfter {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard let self, self.model.update == s else { return }
+                withAnimation(.easeInOut(duration: 0.24)) { self.model.update = .none }
+                self.relayout(allowShrink: true)
+            }
+        }
+    }
+
+    private func startUpdate() {
+        guard let repo = Updater.sourcePath else {
+            setUpdate(.none)
+            return
+        }
+        try? FileManager.default.removeItem(atPath: Updater.progressPath)
+        setUpdate(.installing(0))
+        pinnedUntil = Date().addingTimeInterval(180)     // keep it on screen through the rebuild
+        if !visible { show() }
+        Updater.install(from: repo) { [weak self] err in
+            guard let self else { return }
+            if err != nil { self.setUpdate(.none); return }
+            // follow the updater's own progress file until this process is replaced
+            self.updatePoll?.invalidate()
+            self.updatePoll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] t in
+                guard let self else { return t.invalidate(); }
+                guard let p = Updater.readProgress() else { return }
+                if p < 0 {                                // updater bailed (dirty repo)
+                    t.invalidate()
+                    self.setUpdate(.none)
+                    return
+                }
+                self.pinnedUntil = Date().addingTimeInterval(30)
+                if case .installing(let cur) = self.model.update, cur == p { return }
+                self.model.update = .installing(p)
+            }
+        }
+    }
+
+    /// The updater leaves a marker; if it's here, this launch is the one after an update.
+    private func showInstalledIfJustUpdated() {
+        let f = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/updated")
+        guard FileManager.default.fileExists(atPath: f) else { return }
+        try? FileManager.default.removeItem(atPath: f)
+        pinnedUntil = Date().addingTimeInterval(5)
+        setUpdate(.installed, clearAfter: 5)
+    }
 
     // MARK: click-away
 

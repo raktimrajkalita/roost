@@ -16,6 +16,17 @@ struct VisualEffectBlur: NSViewRepresentable {
     }
 }
 
+/// Where the update flow has got to. It lives in the panel rather than in modal alerts —
+/// a menu-bar app that grows out of the notch shouldn't throw system dialogs at you.
+enum UpdateState: Equatable {
+    case none
+    case checking
+    case upToDate                  // shown briefly, then clears itself
+    case available(Int)            // commits behind main
+    case installing(Int)           // real percent, not a timer — see Updater
+    case installed                 // shown briefly after the relaunch
+}
+
 /// Observable state the SwiftUI panel renders from.
 final class NotchModel: ObservableObject {
     @Published var sessions: [Session] = []
@@ -26,10 +37,13 @@ final class NotchModel: ObservableObject {
     @Published var collapsedScaleY: CGFloat = 0.13   // notch height / full height (set by controller)
     @Published var searching: Bool = false       // search bar open
     @Published var query: String = ""
+    @Published var update: UpdateState = .none
     var onFocus: (Session) -> Void = { _ in }
     var onMute: (String) -> Void = { _ in }
     var onDismiss: (String) -> Void = { _ in }
     var onKeep: (String) -> Void = { _ in }       // pull a search result back onto the panel
+    var onUpdateNow: () -> Void = { }
+    var onUpdateDismiss: () -> Void = { }
     var onReload: () -> Void = { }
     var onSearchWillOpen: () -> Void = { }        // grow the window + take keys BEFORE anything animates
     var onSearchDidClose: () -> Void = { }        // collapse once the bar has retracted
@@ -72,6 +86,18 @@ struct NotchView: View {
         ], startPoint: .bottom, endPoint: .top)
     }
 
+    /// A travelling sine across the panel's width, used as a mask so the glow doesn't just
+    /// pulse in place — the light runs along the bottom edge.
+    private func waveMask(_ t: Double) -> LinearGradient {
+        let n = 14
+        let stops: [Gradient.Stop] = (0...n).map { i in
+            let x = Double(i) / Double(n)
+            let a = 0.5 + 0.5 * sin(2 * Double.pi * (x * 1.35 - t * 0.22))
+            return .init(color: .white.opacity(0.34 + 0.66 * a), location: x)
+        }
+        return LinearGradient(stops: stops, startPoint: .leading, endPoint: .trailing)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Fused notch area. The controls live in HERE, not overlaid on the whole panel —
@@ -95,6 +121,15 @@ struct NotchView: View {
                     .transition(.asymmetric(       // descends out of the notch, like the panel itself
                         insertion: .move(edge: .top).combined(with: .opacity),
                         removal: .move(edge: .top).combined(with: .opacity)))
+            }
+            if model.update != .none {
+                UpdateBanner(state: model.update,
+                             onUpdate: model.onUpdateNow,
+                             onDismiss: model.onUpdateDismiss)
+                    .padding(.horizontal, 8 + model.flareW)
+                    .padding(.top, model.searching ? 0 : 8)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
             Group {
                 if model.rows.isEmpty {
@@ -166,8 +201,9 @@ struct NotchView: View {
                     if glow.breathing {
                         TimelineView(.animation) { tl in
                             let t = tl.date.timeIntervalSinceReferenceDate
-                            let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.30 * t)   // ~3.3s breath
-                            glowGradient(glow.color, peak: 0.055 + 0.095 * p)
+                            let p = 0.5 + 0.5 * sin(2 * Double.pi * 0.315 * t)  // ~3.2s breath, 5% quicker
+                            glowGradient(glow.color, peak: 0.075 + 0.115 * p)   // lifted to offset the mask
+                                .mask(waveMask(t))
                         }
                     } else {
                         glowGradient(glow.color, peak: glow.peak)
@@ -204,6 +240,99 @@ struct NotchView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + (opening ? 0.06 : 0)) {
             searchFocused = opening
         }
+    }
+}
+
+/// The update strip. Same language as a row — an indicator, a line of text, an action on the
+/// right — so it reads as part of the panel rather than a notification bolted on.
+struct UpdateBanner: View {
+    let state: UpdateState
+    var onUpdate: () -> Void
+    var onDismiss: () -> Void
+    @State private var hoverGo = false
+
+    private var accent: Color { Color(red: 0.48, green: 0.64, blue: 1.0) }
+
+    private var label: String {
+        switch state {
+        case .available:  return "New update available"
+        case .checking:   return "Checking for updates…"
+        case .upToDate:   return "Roost is up to date"
+        case .installing(let p): return p <= 0 ? "Updating…" : "Updating… \(p)%"
+        case .installed:  return "Updated to the latest"
+        case .none:       return ""
+        }
+    }
+
+    private var progress: Double? {
+        if case .installing(let p) = state, p > 0 { return min(1, Double(p) / 100) }
+        return nil
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                switch state {
+                case .checking, .installing:
+                    BloomIndicator(color: accent)          // the same working animation as a session
+                case .installed:
+                    Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+                        .foregroundColor(statusColor("done"))
+                case .upToDate:
+                    Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(0.45))
+                default:
+                    Image(systemName: "arrow.down").font(.system(size: 10, weight: .bold))
+                        .foregroundColor(accent)
+                }
+            }
+            .frame(width: 18, height: 14)
+
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.72))
+                .lineLimit(1)
+            Spacer(minLength: 6)
+
+            if case .available = state {
+                Button(action: onUpdate) {
+                    Text("Update")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(hoverGo ? .black : accent)
+                        .padding(.horizontal, 11).padding(.vertical, 4)
+                        .background(Capsule().fill(hoverGo ? accent : accent.opacity(0.16)))
+                }
+                .buttonStyle(.plain)
+                .onHover { hoverGo = $0 }
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.4))
+                        .frame(width: 18, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.white.opacity(0.05))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.07), lineWidth: 1))
+        )
+        // a real fill, driven by SwiftPM's own [N/M] compile count
+        .overlay(alignment: .bottomLeading) {
+            if let p = progress {
+                GeometryReader { geo in
+                    Capsule()
+                        .fill(accent.opacity(0.85))
+                        .frame(width: max(3, geo.size.width * p), height: 2)
+                        .position(x: max(3, geo.size.width * p) / 2, y: geo.size.height - 2)
+                        .animation(.easeOut(duration: 0.3), value: p)
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

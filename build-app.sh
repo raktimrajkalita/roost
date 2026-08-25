@@ -29,6 +29,18 @@ cp packaging/Info.plist "${APP}/Contents/Info.plist"
 cp icon/Roost.icns      "${APP}/Contents/Resources/Roost.icns"
 printf 'APPL????'     > "${APP}/Contents/PkgInfo"
 
+# 3b. stamp provenance so the app can update itself later (must precede signing,
+#     which seals the bundle)
+COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
+if [ -n "${COMMIT}" ]; then
+    PL="${APP}/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Add :RoostCommit string ${COMMIT}" "${PL}" >/dev/null 2>&1 \
+        || /usr/libexec/PlistBuddy -c "Set :RoostCommit ${COMMIT}" "${PL}" >/dev/null 2>&1 || true
+    /usr/libexec/PlistBuddy -c "Add :RoostSourcePath string $(pwd)" "${PL}" >/dev/null 2>&1 \
+        || /usr/libexec/PlistBuddy -c "Set :RoostSourcePath $(pwd)" "${PL}" >/dev/null 2>&1 || true
+    echo "[*] stamped ${COMMIT:0:7} from $(pwd)"
+fi
+
 # 4. ad-hoc sign (stable TCC identity so the Automation grant sticks)
 echo "[*] signing (ad-hoc)"
 codesign --force --deep --sign - "${APP}"
