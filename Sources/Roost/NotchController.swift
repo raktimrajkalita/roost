@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+/// A borderless panel refuses key status by default, so a text field inside it would
+/// never receive a keystroke. Search needs it, so allow it explicitly.
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 /// Owns the notch panel window, hover detection, positioning, and auto-drop.
 /// Trigger-to-open is ONLY the physical notch (slightly inset); the expanded
 /// panel is wider and, once open, the whole panel is the keep-open area.
@@ -15,8 +21,10 @@ final class NotchController {
     private var pinnedUntil = Date.distantPast
     private var prevDone = 0
     private var hideWork: DispatchWorkItem?
+    private var layoutWork: DispatchWorkItem?
 
     private let panelWidth: CGFloat = 380
+    private let rowAnim: Double = 0.28        // row swipe-out; the window shrinks on the same clock
 
     init(store: SessionStore) {
         self.store = store
@@ -25,6 +33,30 @@ final class NotchController {
         model.onMute = { [weak self] id in self?.store.toggleMute(id: id) }
         model.onDismiss = { [weak self] id in self?.store.dismiss(id: id) }
         model.onReload = { [weak self] in self?.store.forceRefresh() }
+        model.searchFn = { [weak self] q in self?.store.search(q) ?? [] }
+        model.onLayout = { [weak self] in self?.relayout() }
+        model.onSearchWillOpen = { [weak self] in
+            guard let self else { return }
+            // Make room BEFORE anything animates. The new space is transparent and the panel is
+            // top-anchored, so growing instantly is invisible; growing late (or with display:false)
+            // shows a stale frame, which is what made the panel blink.
+            self.layoutWork?.cancel()
+            var f = self.panelFrame(searchOverride: true)
+            f.origin.x = self.panel.frame.origin.x
+            if f.height > self.panel.frame.height {
+                self.panel.setFrame(f, display: true, animate: false)
+            }
+            NSApp.activate(ignoringOtherApps: true)         // an accessory app must activate to take keys
+            self.panel.makeKeyAndOrderFront(nil)
+        }
+        model.onSearchDidClose = { [weak self] in
+            guard let self else { return }
+            NSApp.deactivate()                              // hand focus back to whatever you were in
+            self.layoutWork?.cancel()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {   // let the bar retract first
+                self.relayout(allowShrink: true)
+            }
+        }
         buildPanel()
         refresh()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.09, repeats: true) { [weak self] _ in self?.tick() }
@@ -60,13 +92,16 @@ final class NotchController {
     /// Open-trigger: the notch, slightly inset so it's "just inside the notch".
     private func triggerRect() -> CGRect { notchRect().insetBy(dx: 8, dy: 0) }
 
-    private func panelFrame() -> CGRect {
+    /// `searchOverride` lets us measure the searching layout before the flag actually flips.
+    private func panelFrame(searchOverride: Bool? = nil) -> CGRect {
         let s = notchScreen
         let f = s.frame
         let rowH: CGFloat = 49
-        let shown = min(store.sessions.count, 10)                  // cap the panel at 10 rows; the rest scrolls
-        let body = store.sessions.isEmpty ? 46 : (CGFloat(shown) * rowH + 16)
-        let total = notchHeight + body
+        let count = model.rows.count                               // search results when searching
+        let shown = min(count, 10)                                 // cap the panel at 10 rows; the rest scrolls
+        let body = count == 0 ? 46 : (CGFloat(shown) * rowH + 16)
+        let searchBar: CGFloat = (searchOverride ?? model.searching) ? 44 : 0
+        let total = notchHeight + searchBar + body
         let W = model.width + model.flareW * 2            // body + the two top shoulders
         return CGRect(x: f.midX - W / 2, y: f.maxY - total, width: W, height: total)
     }
@@ -74,9 +109,9 @@ final class NotchController {
     // MARK: panel
 
     private func buildPanel() {
-        panel = NSPanel(contentRect: panelFrame(),
-                        styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered, defer: false)
+        panel = KeyablePanel(contentRect: panelFrame(),
+                             styleMask: [.borderless, .nonactivatingPanel],
+                             backing: .buffered, defer: false)
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false          // accessory app is never "active" — don't let the panel get suppressed
         panel.level = .screenSaver               // topmost: above the menu bar/notch AND over another app's fullscreen
@@ -92,7 +127,11 @@ final class NotchController {
 
     private func updateContent() {
         model.notchHeight = notchHeight
-        model.sessions = store.sessions          // SwiftUI updates rows in place, no re-animation
+        // rows animate in/out (dismiss and refresh both swipe them off to the trailing edge);
+        // unchanged rows are matched by id and just slide into their new slot
+        withAnimation(.easeInOut(duration: rowAnim)) {
+            model.sessions = store.sessions
+        }
         let f = panelFrame()                     // collapsed target = the physical notch, as a fraction of the full panel
         model.collapsedScaleX = min(max(notchRect().width / f.width, 0.2), 0.9)
         model.collapsedScaleY = min(max(notchHeight / f.height, 0.05), 0.9)
@@ -103,7 +142,7 @@ final class NotchController {
     func refresh() {
         let done = store.sessions.filter { $0.status == "done" }.count
         updateContent()
-        if visible { panel.setFrame(panelFrame(), display: true, animate: false) }
+        if visible { relayout(allowShrink: true) }   // grow/shrink alongside the row animation
         if done > prevDone {                     // a session just finished -> notification drop
             pinnedUntil = Date().addingTimeInterval(3)
             if !visible { show() }
@@ -138,6 +177,31 @@ final class NotchController {
 
     // MARK: hover loop
 
+    /// Re-measure the window after the rows or the search bar change.
+    /// Coalesced, because every keystroke fires this and interrupting an in-flight window
+    /// animation is what makes the panel stutter.
+    private func relayout(allowShrink: Bool = false) {
+        layoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.visible else { return }
+            var target = self.panelFrame()
+            // While searching, only ever grow. The visible edge is drawn by SwiftUI, so the panel
+            // can shrink softly inside a window that stays put — no snapping frame.
+            if self.model.searching && !allowShrink && target.height < self.panel.frame.height {
+                return
+            }
+            if abs(target.height - self.panel.frame.height) < 0.5 { return }
+            target.origin.x = self.panel.frame.origin.x
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.34
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.panel.animator().setFrame(target, display: true)
+            }
+        }
+        layoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.09, execute: work)
+    }
+
     private func tick() {
         let m = NSEvent.mouseLocation           // screen coords, bottom-left origin
         let now = Date()
@@ -146,6 +210,7 @@ final class NotchController {
         let inside = inTrigger || overPanel
         if inside { lastInside = now }
         let want = inside
+            || model.searching                  // never yank the panel away mid-search
             || now < pinnedUntil
             || (visible && now.timeIntervalSince(lastInside) < 0.25)
         if want {

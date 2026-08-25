@@ -23,6 +23,7 @@ I wanted something ambient: a single place, always in view, that tells me what e
 - **It grows out of the notch.** Open and close are a real spring animation — the panel expands from a notch-sized sliver into the full UI and collapses back into it. The top strip is absolute black so it fuses with the physical notch; the body below is real frosted glass.
 - **It comes to you.** When a session finishes, the panel drops for a few seconds and plays a short metallic chime — boosted if music or a video is already playing, so it cuts through.
 - **Your names, not folders.** Roost shows each session's **iTerm2 tab name** (the name Claude Code sets, e.g. "MYPROJ", "Aina Main"), falling back to the folder name only when a tab has none.
+- **Search everything.** The lens in the notch turns into a search field that reaches *every* session on disk — including ones that finished hours ago and dropped off the panel. Matches on session name, folder, or last action.
 - **Click to teleport.** Click a session and Roost focuses that exact iTerm2 tab — no more hunting.
 - **Per-session mute.** Each row has its own bell. Silence a chatty session without muting the rest.
 - **Refresh clears the noise.** The reload button wipes every finished row; they stay gone until a *new* completion comes in.
@@ -30,7 +31,7 @@ I wanted something ambient: a single place, always in view, that tells me what e
 - **Never gets stuck.** Statuses self-correct (an idle "waiting for input" ping is never mistaken for a real prompt), and dormant sessions drop off on their own.
 - **Menu bar fallback.** A menu bar item shows live counts and the full list, in case you want it without the notch.
 
-Status is real, not guessed: green = done and waiting for you, amber = blocked on your input or a permission, blue = actively thinking.
+Status is real, not guessed — and the panel spends its colour carefully. **Amber** means a session is blocked on your answer; **green** means it finished; thinking has no hue at all, because it needs nothing from you. Rows show how long it's been rather than repeating their status in words, and the glow along the bottom edge reports the whole set at a glance: breathing white while anything is working, amber when something needs you, green when everything is done.
 
 ## How it works
 

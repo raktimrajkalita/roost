@@ -10,6 +10,7 @@ struct Session: Identifiable {
     var itermSession: String
     var termProgram: String
     var tty: String = ""    // controlling tty (e.g. /dev/ttys005) — Terminal.app's per-tab id
+    var doneAt: Double = 0  // when it finished — the done indicator resolves once from here, then rests
     var displayName: String // resolved iTerm tab name, or project
     var muted: Bool = false
 
@@ -31,8 +32,20 @@ struct Session: Identifiable {
 /// Reads and watches the state directory the Python reporter writes to.
 /// This is the whole data layer — identical source of truth as the Hammerspoon build.
 final class SessionStore {
-    private(set) var sessions: [Session] = []
+    private(set) var sessions: [Session] = []       // what the panel shows (filtered)
+    private(set) var allSessions: [Session] = []    // every session on disk, for search
     var onChange: (() -> Void)?
+
+    /// Search every session ever reported — including ones long dormant and dropped from the panel.
+    func search(_ query: String) -> [Session] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return [] }
+        return allSessions.filter {
+            $0.displayName.lowercased().contains(q)
+            || $0.project.lowercased().contains(q)
+            || $0.lastAction.lowercased().contains(q)
+        }
+    }
 
     private let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/state")
     private let muteDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/mutes")
@@ -104,9 +117,10 @@ final class SessionStore {
         let fm = FileManager.default
         let now = Date().timeIntervalSince1970
         var out: [Session] = []
+        var everything: [Session] = []
 
         guard let files = try? fm.contentsOfDirectory(atPath: stateDir) else {
-            if !sessions.isEmpty { sessions = []; onChange?() }
+            if !sessions.isEmpty { sessions = []; allSessions = []; onChange?() }
             return
         }
 
@@ -117,19 +131,12 @@ final class SessionStore {
             else { continue }
 
             let updated = (obj["updated"] as? Double) ?? now
-            if now - updated > 20 * 60 { continue }              // drop dormant (>20 min)
-            if let d = dismissedBefore[f], updated <= d { continue }   // user dismissed it; back on its next update
 
             var status = (obj["status"] as? String) ?? "idle"
             let lastAction = (obj["last_action"] as? String) ?? ""
             let low = lastAction.lowercased()
             if status == "waiting" && low.contains("waiting for") { status = "done" }   // idle ping, not a prompt
             if status == "thinking" && now - updated > 300 { status = "done" }           // silent 5 min -> idle
-
-            if status == "done" {                                                        // a refresh clears done rows; they stay hidden until a NEW completion
-                let doneAt = (obj["done_at"] as? Double) ?? updated
-                if doneAt < dismissedDoneBefore { continue }
-            }
 
             let project = (obj["project"] as? String) ?? "session"
             let iterm = (obj["iterm_session"] as? String) ?? ""
@@ -140,15 +147,25 @@ final class SessionStore {
                 displayName: project
             )
             s.tty = (obj["tty"] as? String) ?? ""
+            s.doneAt = (obj["done_at"] as? Double) ?? updated
             if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }   // iTerm session name
             else if !s.tty.isEmpty, let name = names[s.tty] { s.displayName = name }      // Terminal.app custom title (rename)
             let fid = (f as NSString).deletingPathExtension
             s.muted = fm.fileExists(atPath: (muteDir as NSString).appendingPathComponent(fid))
+
+            everything.append(s)                                  // search sees every session, however old
+
+            // visibility filters — these only affect the panel list, never search
+            if now - updated > 20 * 60 { continue }               // drop dormant (>20 min)
+            if let d = dismissedBefore[f], updated <= d { continue }   // dismissed; back on its next update
+            if status == "done" && s.doneAt < dismissedDoneBefore { continue }   // a refresh cleared it
             out.append(s)
         }
 
         let order = ["waiting": 1, "thinking": 2, "done": 3]
         out.sort { (order[$0.status] ?? 9, -$0.updated) < (order[$1.status] ?? 9, -$1.updated) }
+        everything.sort { $0.updated > $1.updated }
+        allSessions = everything
 
         if !sameOrder(out, sessions) {
             sessions = out

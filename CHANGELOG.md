@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.1 — search + UI retouch (2026-08-25)
+
+### Search
+- **Search every session from the notch.** A lens in the notch strip morphs into an ✕ and a
+  search field descends out of the notch. It searches session name, project folder and last
+  action across **every** session on disk — including ones long dormant and dropped from the
+  panel, and ones you've dismissed — so a session that finished three hours ago is still findable.
+- The panel is a non-activating window, which can never become key, so a text field in it would
+  receive no keystrokes. It's now a `KeyablePanel` that can take key focus; opening search
+  activates briefly and closing hands focus straight back to your terminal.
+- The panel is pinned open while searching, so moving the mouse away no longer yanks it shut
+  mid-type.
+
+### Indicators — one family, two hues
+- **thinking → Bloom**: nine dots on a phyllotaxis spiral (golden angle 137.5°, radius √n),
+  each breathing on a staggered phase. Rendered white — thinking has no hue, because it needs
+  nothing from you.
+- **waiting → a single amber dot**, pulsing.
+- **done → Settle**: the halo contracts onto a core and holds. Driven off the session's own
+  `done_at`, so it resolves once on arrival and never replays.
+- Colour now means something: amber = answer me, green = finished. Two hues in the whole panel
+  instead of three saturated ones printed twice per row.
+
+### Panel polish
+- **The status word is gone, replaced by elapsed time** (`now`, `3m`, `2h`). The word only
+  repeated the icon beside it and the sentence under it; the age is information you had nowhere else.
+- **Quiet right edge.** The bell no longer renders on every row at rest — hover a row and the
+  controls take the timestamp's slot, in a fixed-width well so nothing shifts. A muted session
+  still shows its bell, because there it's a state rather than a control.
+- **Row weight carries the hierarchy**: actionable rows sit forward, working rows sit back.
+- **Rows swipe out.** Dismissing one, or clearing the finished ones with refresh, slides them
+  off to the trailing edge while the rest close the gap — and the window resizes on the same clock.
+- **Inner glow along the bottom edge** that reports the whole panel's state: a white breath while
+  anything is thinking, amber when something is blocked on you, green when everything is done,
+  a quiet blue when nothing is running.
+- Window resizes are coalesced, and while searching the window only ever grows — the visible edge
+  is drawn by SwiftUI, so the panel shrinks softly inside a window that stays put instead of snapping.
+- The strip controls (reload left, search right) live inside the notch strip itself rather than
+  overlaid on the panel, so the panel's spring can't drag them around.
+
 ## v2.0 — native rewrite (2026-08-24)
 
 A ground-up native **Swift / AppKit / SwiftUI** rewrite, replacing the Hammerspoon
