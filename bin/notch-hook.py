@@ -30,27 +30,39 @@ def read_payload():
         return {}
 
 
+def _norm_tty(t):
+    if not t or t in ("?", "??", "-"):
+        return ""
+    if t.startswith("/dev/"):
+        return t
+    if t.startswith("tty"):
+        return "/dev/" + t
+    return "/dev/tty" + t
+
+
 def controlling_tty():
-    """The tab's tty (e.g. /dev/ttys005) — the stable per-tab id Terminal.app exposes
-    via AppleScript. `ps` reports this process's controlling terminal even when the
-    hook's stdio is piped; on macOS /dev/tty only names itself, so it can't be used."""
-    try:
-        out = subprocess.run(["ps", "-o", "tty=", "-p", str(os.getpid())],
-                             capture_output=True, text=True, timeout=2).stdout.strip()
-        if out and out not in ("?", "??", "-"):
-            if out.startswith("/dev/"):
-                return out
-            if out.startswith("tty"):
-                return "/dev/" + out         # ps gives "ttys005" -> /dev/ttys005
-            return "/dev/tty" + out          # some builds abbreviate as "s005"
-    except Exception:
-        pass
-    for fd in (0, 1, 2):                      # last resort if stdio happens to be a tty
+    """The tab's tty (e.g. /dev/ttys005) — Terminal.app's stable per-tab id. The hook is
+    usually detached from the controlling terminal (ps on our own pid gives '??'), so walk
+    up the parent chain until we reach the process (claude / login shell) that owns a tty."""
+    pid = os.getpid()
+    for _ in range(12):
         try:
-            if os.isatty(fd):
-                return os.ttyname(fd)
-        except OSError:
-            pass
+            line = subprocess.run(["ps", "-o", "tty=,ppid=", "-p", str(pid)],
+                                  capture_output=True, text=True, timeout=2).stdout.split()
+        except Exception:
+            break
+        if not line:
+            break
+        got = _norm_tty(line[0])
+        if got:
+            return got
+        ppid = line[1] if len(line) > 1 else "1"
+        if ppid in ("0", "1"):
+            break
+        try:
+            pid = int(ppid)
+        except ValueError:
+            break
     return ""
 
 
