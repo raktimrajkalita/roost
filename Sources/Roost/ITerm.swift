@@ -106,7 +106,9 @@ enum ITerm {
     }
 
     /// Focus a Terminal.app tab by its tty (e.g. /dev/ttys005) — Terminal's stable per-tab id.
-    /// `set index of w to 1` is what reliably raises the right window when several are open.
+    /// Set the window's `selected tab` directly, then raise it. Do NOT also set `index of w to 1`:
+    /// reordering the window list fights `frontmost` and reliably lands on the wrong window when
+    /// more than one is open.
     static func focusTerminal(tty: String) {
         let script = """
         tell application "Terminal"
@@ -114,9 +116,8 @@ enum ITerm {
           repeat with w in windows
             repeat with t in tabs of w
               if tty of t is "\(tty)" then
-                set selected of t to true
+                set selected tab of w to t
                 set frontmost of w to true
-                set index of w to 1
                 return
               end if
             end repeat

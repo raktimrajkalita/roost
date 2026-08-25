@@ -2,6 +2,12 @@
 
 ## v2.2 — quality of life (2026-08-25)
 
+- **Terminal.app click-to-jump landed on the wrong window.** The focus script set the tab, raised
+  its window, and *then* also set `index of w to 1`. That reorder fights `frontmost` and lands on
+  the previously focused window. With six windows open the old script scored 6/12; setting the
+  window's `selected tab` directly and dropping the reorder scores 12/12. iTerm2 was never
+  affected — it focuses by its own `unique id`.
+
 - **Updating left two copies running.** `build-app.sh --install` killed Roost but only unloaded
   the launchd job twenty lines later, so launchd still owned the job during the swap and could
   respawn the old build — then `launchctl load` started another. It now unloads first, kills,
