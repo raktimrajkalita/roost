@@ -65,6 +65,48 @@ final class NotchController {
                 self.relayout(allowShrink: true)
             }
         }
+        model.onReplyWillOpen = { [weak self] in
+            guard let self else { return }
+            // Same order as search, and for the same reason: grow the window first, while
+            // nothing is animating, or the panel shows a stale frame and blinks.
+            self.layoutWork?.cancel()
+            var f = self.panelFrame()
+            f.origin.x = self.panel.frame.origin.x
+            if f.height > self.panel.frame.height {
+                self.panel.setFrame(f, display: true, animate: false)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            self.panel.makeKeyAndOrderFront(nil)
+            self.startClickAway()
+        }
+        model.onReplyDidClose = { [weak self] in
+            guard let self else { return }
+            self.stopClickAway()
+            NSApp.deactivate()
+            self.layoutWork?.cancel()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                self.relayout(allowShrink: true)
+            }
+        }
+        model.onSend = { [weak self] session, text in
+            guard let self else { return }
+            let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { return }
+            self.model.send = .sending
+            ITerm.send(text: body, to: session) { result in
+                switch result {
+                case .ok:
+                    self.model.send = .sent
+                    self.model.draft = ""
+                    // Close on a short beat so "sent" is legible rather than a flicker.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                        if self.model.send == .sent { self.closeReply() }
+                    }
+                case .refused(let why):
+                    self.model.send = .failed(why)
+                }
+            }
+        }
         model.onUpdateNow = { [weak self] in self?.startUpdate() }
         model.onUpdateDismiss = { [weak self] in self?.setUpdate(.none) }
         buildPanel()
@@ -120,7 +162,11 @@ final class NotchController {
         let body = count == 0 ? 46 : (CGFloat(shown) * rowH + 16)
         let searchBar: CGFloat = (searchOverride ?? model.searching) ? 44 : 0
         let banner: CGFloat = model.update == .none ? 0 : (model.searching ? 42 : 50)
-        let total = notchHeight + searchBar + banner + body
+        // The reply view replaces the list rather than sitting beside it, so it replaces
+        // those heights too instead of adding to them.
+        let total = model.replyingTo != nil
+            ? notchHeight + model.replyBlockHeight
+            : notchHeight + searchBar + banner + body
         let W = model.width + model.flareW * 2            // body + the two top shoulders
         return CGRect(x: f.midX - W / 2, y: f.maxY - total, width: W, height: total)
     }
@@ -301,13 +347,29 @@ final class NotchController {
     private func startClickAway() {
         guard clickAway == nil else { return }
         clickAway = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
-            [weak self] _ in self?.collapseFromSearch()
+            [weak self] _ in
+            guard let self else { return }
+            if self.model.replyingTo != nil { self.closeReply() } else { self.collapseFromSearch() }
         }
     }
 
     private func stopClickAway() {
         if let m = clickAway { NSEvent.removeMonitor(m) }
         clickAway = nil
+    }
+
+    /// Clicked outside, or the send landed: drop the reply view and put the panel away.
+    private func closeReply() {
+        guard model.replyingTo != nil else { return }
+        stopClickAway()
+        withAnimation(.easeOut(duration: 0.2)) { model.replyingTo = nil }
+        model.draft = ""
+        model.send = .idle
+        NSApp.deactivate()
+        pinnedUntil = .distantPast
+        lastInside = .distantPast
+        layoutWork?.cancel()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { self.relayout(allowShrink: true) }
     }
 
     /// Clicked outside: leave search and put the panel away entirely.
@@ -357,6 +419,7 @@ final class NotchController {
         let inside = inTrigger || overPanel
         if inside { lastInside = now }
         let want = inside
+            || model.replyingTo != nil          // never yank the panel away mid-reply
             || model.searching                  // never yank the panel away mid-search
             || now < pinnedUntil
             || (visible && now.timeIntervalSince(lastInside) < 0.25)

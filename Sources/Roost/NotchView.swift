@@ -27,6 +27,14 @@ enum UpdateState: Equatable {
     case installed                 // shown briefly after the relaunch
 }
 
+/// Where a reply has got to. Reported in the reply view itself, never as an alert.
+enum SendState: Equatable {
+    case idle
+    case sending
+    case sent
+    case failed(String)
+}
+
 /// Observable state the SwiftUI panel renders from.
 final class NotchModel: ObservableObject {
     @Published var sessions: [Session] = []
@@ -37,6 +45,9 @@ final class NotchModel: ObservableObject {
     @Published var collapsedScaleY: CGFloat = 0.13   // notch height / full height (set by controller)
     @Published var searching: Bool = false       // search bar open
     @Published var query: String = ""
+    @Published var replyingTo: String? = nil     // session id whose reply view is open
+    @Published var draft: String = ""
+    @Published var send: SendState = .idle
     @Published var update: UpdateState = .none
     var onFocus: (Session) -> Void = { _ in }
     var onMute: (String) -> Void = { _ in }
@@ -45,6 +56,9 @@ final class NotchModel: ObservableObject {
     var onUpdateNow: () -> Void = { }
     var onUpdateDismiss: () -> Void = { }
     var onReload: () -> Void = { }
+    var onReplyWillOpen: () -> Void = { }         // same dance as search: grow, activate, take keys
+    var onReplyDidClose: () -> Void = { }
+    var onSend: (Session, String) -> Void = { _, _ in }
     var onSearchWillOpen: () -> Void = { }        // grow the window + take keys BEFORE anything animates
     var onSearchDidClose: () -> Void = { }        // collapse once the bar has retracted
     var onLayout: () -> Void = { }                // re-measure the window when results change
@@ -56,6 +70,27 @@ final class NotchModel: ObservableObject {
             ? searchFn(query) : sessions
     }
 
+    /// Height of just the message scroll area. Estimated from length rather than measured:
+    /// the window frame has to be set before SwiftUI lays out, so a real measurement would
+    /// arrive a frame too late and the panel would visibly resize under the text.
+    var replyMessageHeight: CGFloat {
+        guard let s = replyTarget else { return 0 }
+        let perLine = 52.0                                    // ~chars per line at 12pt in a 380pt body
+        let raw = ceil(Double(max(s.message.count, 1)) / perLine)
+        let lines = min(max(raw, 1), 9)                       // 9 lines, then it scrolls
+        return CGFloat(lines) * 16 + 6
+    }
+
+    /// Header + message + field + hint + the padding around them.
+    var replyBlockHeight: CGFloat { replyingTo == nil ? 0 : replyMessageHeight + 104 }
+
+    /// The session the reply view is showing, if any. Looked up across both lists so a
+    /// search hit is answerable too, not just a row currently on the panel.
+    var replyTarget: Session? {
+        guard let id = replyingTo else { return nil }
+        return sessions.first { $0.id == id } ?? rows.first { $0.id == id }
+    }
+
     let flareW: CGFloat = 20     // top shoulders flare this far past each body wall
     let flareH: CGFloat = 13     // vertical height of the concave shoulder curve
     var fullWidth: CGFloat { width + flareW * 2 }
@@ -65,6 +100,7 @@ final class NotchModel: ObservableObject {
 struct NotchView: View {
     @ObservedObject var model: NotchModel
     @FocusState private var searchFocused: Bool
+    @FocusState private var replyFocused: Bool
 
     /// The panel's overall state, read off the whole list rather than any one row:
     /// still working → a white breath; blocked → amber; everything finished → green;
@@ -113,6 +149,21 @@ struct NotchView: View {
                     SearchToggleButton(active: model.searching) { toggleSearch() }
                         .padding(.trailing, 12 + model.flareW)
                 }
+            if let target = model.replyTarget {
+                ReplyView(session: target,
+                          draft: $model.draft,
+                          focused: $replyFocused,
+                          state: model.send,
+                          messageHeight: model.replyMessageHeight,
+                          onSend: { model.onSend(target, model.draft) },
+                          onCancel: { closeReply() })
+                    .padding(.horizontal, 8 + model.flareW)
+                    .padding(.top, 10)
+                    .padding(.bottom, 12)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)))
+            } else {
             if model.searching {
                 SearchBar(query: $model.query, focused: $searchFocused)
                     .padding(.horizontal, 8 + model.flareW)
@@ -154,6 +205,7 @@ struct NotchView: View {
                             ForEach(model.rows) { s in
                                 RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
                                         onDismiss: model.onDismiss, onKeep: model.onKeep,
+                                        onReply: { openReply($0) },
                                         offPanel: model.searching && !model.sessions.contains { $0.id == s.id },
                                         animate: model.expanded)
                                 .transition(.asymmetric(
@@ -168,6 +220,7 @@ struct NotchView: View {
                         ForEach(model.rows) { s in
                             RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
                                         onDismiss: model.onDismiss, onKeep: model.onKeep,
+                                        onReply: { openReply($0) },
                                         offPanel: model.searching && !model.sessions.contains { $0.id == s.id },
                                         animate: model.expanded)
                                 .transition(.asymmetric(
@@ -180,6 +233,7 @@ struct NotchView: View {
             .padding(.horizontal, 8 + model.flareW)      // inset content to the body width, inside the flare
             .padding(.top, 6)
             .padding(.bottom, 10)
+            }
         }
         .frame(width: model.fullWidth)
         .background(
@@ -227,6 +281,30 @@ struct NotchView: View {
         // the window may be taller than the panel (it only grows while searching, never shrinks),
         // so keep the panel itself hugging the notch instead of centring in the leftover space
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Open the reply view for a row. Mirrors toggleSearch: make room and take key focus
+    /// while nothing is animating, then animate.
+    private func openReply(_ s: Session) {
+        model.draft = ""
+        model.send = .idle
+        model.replyingTo = s.id          // set before the callback so the frame maths sees it
+        model.onReplyWillOpen()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            model.searching = false
+            model.query = ""
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { replyFocused = true }
+    }
+
+    private func closeReply() {
+        replyFocused = false
+        withAnimation(.easeOut(duration: 0.2)) {
+            model.replyingTo = nil
+        }
+        model.draft = ""
+        model.send = .idle
+        model.onReplyDidClose()
     }
 
     private func toggleSearch() {
@@ -348,6 +426,91 @@ struct UpdateBanner: View {
     }
 }
 
+/// Read the message, type an answer. Takes over the body while it's open rather than
+/// expanding inside a row: the whole point is to read something longer than a row
+/// subtitle, and competing with ten rows for height defeats that.
+struct ReplyView: View {
+    let session: Session
+    @Binding var draft: String
+    @FocusState.Binding var focused: Bool
+    let state: SendState
+    var messageHeight: CGFloat
+    var onSend: () -> Void
+    var onCancel: () -> Void
+    @State private var lineIn = false
+
+    private var sending: Bool { state == .sending }
+
+    /// The status line does double duty: it is the hint until something happens to report.
+    private var footer: (text: String, color: Color) {
+        switch state {
+        case .idle:
+            if session.wantsDigit { return ("numbered prompt · type the option number", .white.opacity(0.34)) }
+            return ("enter to send · esc to close", .white.opacity(0.34))
+        case .sending: return ("sending…", .white.opacity(0.5))
+        case .sent:    return ("sent", statusColor("done"))
+        case .failed(let why): return (why, statusColor("waiting"))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 11) {
+                StatusIndicator(status: session.status, doneAt: session.doneAt, animate: true)
+                    .frame(width: 18, height: 14)
+                Text(session.displayName)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.95))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.4))
+                        .frame(width: 20, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+            }
+
+            ScrollView(.vertical, showsIndicators: true) {
+                Text(session.message.isEmpty ? "nothing captured for this session yet" : session.message)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(session.message.isEmpty ? 0.3 : 0.72))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: messageHeight)
+
+            TextField(session.wantsDigit ? "option number" : "Reply to this session", text: $draft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundColor(.white.opacity(sending ? 0.4 : 0.95))
+                .focused($focused)
+                .disabled(sending)
+                .onSubmit(onSend)
+                .padding(.bottom, 6)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(.white.opacity(focused ? 0.30 : 0.15))
+                        .frame(height: 1)
+                        .scaleEffect(x: lineIn ? 1 : 0, anchor: .leading)
+                }
+
+            Text(footer.text)
+                .font(.system(size: 10.5))
+                .foregroundColor(footer.color)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .animation(.easeOut(duration: 0.2), value: focused)
+        .animation(.easeOut(duration: 0.2), value: state)
+        .onExitCommand(perform: onCancel)     // esc, as the hint promises
+        .onAppear { withAnimation(.easeOut(duration: 0.34).delay(0.04)) { lineIn = true } }
+    }
+}
+
 /// The search field: no chrome, just a rule underneath that draws itself in from the left.
 struct SearchBar: View {
     @Binding var query: String
@@ -434,6 +597,7 @@ struct RowView: View {
     var onMute: (String) -> Void
     var onDismiss: (String) -> Void
     var onKeep: (String) -> Void = { _ in }
+    var onReply: (Session) -> Void = { _ in }
     var offPanel: Bool = false          // a search hit that isn't on the panel right now
     var animate: Bool = true            // false while the panel is off screen
     @State private var hover = false
@@ -478,6 +642,20 @@ struct RowView: View {
             Group {
                 if hover {
                     HStack(spacing: 0) {
+                        // Only offered when the session is parked and we know its terminal.
+                        // This is an affordance test, not a safety one: the tty guard runs
+                        // at send time, because the tab can change under us in between.
+                        if session.replyable {
+                            Button(action: { onReply(session) }) {
+                                Image(systemName: "arrowshape.turn.up.left.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.55))
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Reply to this session")
+                        }
                         Button(action: { onMute(session.id) }) {
                             Image(systemName: session.muted ? "bell.slash.fill" : "bell.fill")
                                 .font(.system(size: 11))
@@ -514,7 +692,7 @@ struct RowView: View {
                     }
                 }
             }
-            .frame(width: 46, alignment: .trailing)
+            .frame(width: 70, alignment: .trailing)   // fits reply + bell + ✕ without shifting
         }
         .padding(.horizontal, 10)
         .frame(height: 46)
