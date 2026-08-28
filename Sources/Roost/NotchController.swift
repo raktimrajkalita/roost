@@ -109,27 +109,13 @@ final class NotchController {
                 switch result {
                 case .ok:
                     self.model.send = .sent
-                    self.model.draft = ""
+                    self.model.drafts[session.id] = ""
                     // Close on a short beat so "sent" is legible rather than a flicker.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
                         if self.model.send == .sent { self.closeReply() }
                     }
                 case .refused(let why):
                     self.model.send = .failed(why)
-                }
-            }
-        }
-        model.onInlineSend = { [weak self] session, text in
-            guard let self else { return }
-            ITerm.send(text: text, to: session) { result in
-                if case .refused(let why) = result {
-                    // Nothing in a row can explain a refusal, so escalate into the full
-                    // view: it shows the reason and keeps the draft, rather than swallowing
-                    // both and leaving you wondering whether it sent.
-                    self.model.draft = text
-                    self.model.send = .failed(why)
-                    self.model.replyingTo = session.id
-                    self.model.onReplyWillOpen()
                 }
             }
         }
@@ -209,11 +195,9 @@ final class NotchController {
         let body = count == 0 ? 46 : (CGFloat(shown) * rowH + 16)
         let searchBar: CGFloat = (searchOverride ?? model.searching) ? 44 : 0
         let banner: CGFloat = model.update == .none ? 0 : (model.searching ? 42 : 50)
-        // The reply view replaces the list rather than sitting beside it, so it replaces
-        // those heights too instead of adding to them.
-        let total = model.replyingTo != nil
-            ? notchHeight + model.replyBlockHeight
-            : notchHeight + searchBar + banner + body
+        // The expanded row grows in place, so its extra height ADDS to the list rather than
+        // replacing it. Every other row stays exactly where it was.
+        let total = notchHeight + searchBar + banner + body + model.replyBlockHeight
         let W = model.width + model.flareW * 2            // body + the two top shoulders
         return CGRect(x: f.midX - W / 2, y: f.maxY - total, width: W, height: total)
     }
@@ -411,7 +395,6 @@ final class NotchController {
         stopClickAway()
         withAnimation(.easeOut(duration: 0.2)) { model.replyingTo = nil }
         model.promptChoices = []
-        model.draft = ""
         model.send = .idle
         NSApp.deactivate()
         pinnedUntil = .distantPast

@@ -56,7 +56,7 @@ final class NotchModel: ObservableObject {
     @Published var searching: Bool = false       // search bar open
     @Published var query: String = ""
     @Published var replyingTo: String? = nil     // session id whose reply view is open
-    @Published var draft: String = ""
+    @Published var drafts: [String: String] = [:]   // per session; a draft belongs to its row
     @Published var send: SendState = .idle
     @Published var inlineEditing: Bool = false   // a row's own field has focus
     @Published var promptChoices: [ITerm.PromptChoice] = []   // read off the terminal; empty if not a selector
@@ -71,7 +71,6 @@ final class NotchModel: ObservableObject {
     var onReplyWillOpen: () -> Void = { }         // same dance as search: grow, activate, take keys
     var onReplyDidClose: () -> Void = { }
     var onSend: (Session, String) -> Void = { _, _ in }
-    var onInlineSend: (Session, String) -> Void = { _, _ in }
     var onChoose: (Session, ITerm.PromptChoice) -> Void = { _, _ in }
     var onSearchWillOpen: () -> Void = { }        // grow the window + take keys BEFORE anything animates
     var onSearchDidClose: () -> Void = { }        // collapse once the bar has retracted
@@ -82,6 +81,25 @@ final class NotchModel: ObservableObject {
     var rows: [Session] {
         (searching && !query.trimmingCharacters(in: .whitespaces).isEmpty)
             ? searchFn(query) : sessions
+    }
+
+    /// Expand a row in place. Closing any other one first keeps the panel to a single
+    /// reader, which is what makes the height maths tractable.
+    func openReply(_ s: Session) {
+        guard replyingTo != s.id else { return }
+        replyingTo = s.id
+        send = .idle
+        promptChoices = []
+        onReplyWillOpen()
+    }
+
+    func closeReply() {
+        guard replyingTo != nil else { return }
+        replyingTo = nil
+        promptChoices = []
+        send = .idle
+        inlineEditing = false
+        onReplyDidClose()
     }
 
     /// Height of just the message scroll area. Shared with the preview harness so the two
@@ -95,7 +113,7 @@ final class NotchModel: ObservableObject {
     var replyBlockHeight: CGFloat {
         guard replyingTo != nil else { return 0 }
         let options = promptChoices.isEmpty ? 0 : CGFloat(promptChoices.count) * 25 + 12
-        return replyMessageHeight + options + 104
+        return replyMessageHeight + options + 40
     }
 
     /// The session the reply view is showing, if any. Looked up across both lists so a
@@ -163,23 +181,6 @@ struct NotchView: View {
                     SearchToggleButton(active: model.searching) { toggleSearch() }
                         .padding(.trailing, 12 + model.flareW)
                 }
-            if let target = model.replyTarget {
-                ReplyView(session: target,
-                          draft: $model.draft,
-                          focused: $replyFocused,
-                          state: model.send,
-                          messageHeight: model.replyMessageHeight,
-                          choices: model.promptChoices,
-                          onChoose: { model.onChoose(target, $0) },
-                          onSend: { model.onSend(target, model.draft) },
-                          onCancel: { closeReply() })
-                    .padding(.horizontal, 8 + model.flareW)
-                    .padding(.top, 10)
-                    .padding(.bottom, 12)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .move(edge: .top).combined(with: .opacity)))
-            } else {
             if model.searching {
                 SearchBar(query: $model.query, focused: $searchFocused)
                     .padding(.horizontal, 8 + model.flareW)
@@ -219,11 +220,8 @@ struct NotchView: View {
                     ScrollView(.vertical, showsIndicators: true) {   // beyond 10, cap the height and scroll
                         VStack(spacing: 3) {
                             ForEach(model.rows) { s in
-                                RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
+                                RowView(model: model, session: s, onFocus: model.onFocus, onMute: model.onMute,
                                         onDismiss: model.onDismiss, onKeep: model.onKeep,
-                                        onReply: { openReply($0) },
-                                        onInlineSend: model.onInlineSend,
-                                        onEditing: { model.inlineEditing = $0 },
                                         offPanel: model.searching && !model.sessions.contains { $0.id == s.id },
                                         animate: model.expanded)
                                 .transition(.asymmetric(
@@ -236,11 +234,8 @@ struct NotchView: View {
                 } else {
                     VStack(spacing: 3) {
                         ForEach(model.rows) { s in
-                            RowView(session: s, onFocus: model.onFocus, onMute: model.onMute,
+                            RowView(model: model, session: s, onFocus: model.onFocus, onMute: model.onMute,
                                         onDismiss: model.onDismiss, onKeep: model.onKeep,
-                                        onReply: { openReply($0) },
-                                        onInlineSend: model.onInlineSend,
-                                        onEditing: { model.inlineEditing = $0 },
                                         offPanel: model.searching && !model.sessions.contains { $0.id == s.id },
                                         animate: model.expanded)
                                 .transition(.asymmetric(
@@ -253,7 +248,6 @@ struct NotchView: View {
             .padding(.horizontal, 8 + model.flareW)      // inset content to the body width, inside the flare
             .padding(.top, 6)
             .padding(.bottom, 10)
-            }
         }
         .frame(width: model.fullWidth)
         .background(
@@ -305,28 +299,6 @@ struct NotchView: View {
 
     /// Open the reply view for a row. Mirrors toggleSearch: make room and take key focus
     /// while nothing is animating, then animate.
-    private func openReply(_ s: Session) {
-        model.draft = ""
-        model.send = .idle
-        model.replyingTo = s.id          // set before the callback so the frame maths sees it
-        model.onReplyWillOpen()
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-            model.searching = false
-            model.query = ""
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { replyFocused = true }
-    }
-
-    private func closeReply() {
-        replyFocused = false
-        withAnimation(.easeOut(duration: 0.2)) {
-            model.replyingTo = nil
-        }
-        model.draft = ""
-        model.send = .idle
-        model.onReplyDidClose()
-    }
-
     private func toggleSearch() {
         let opening = !model.searching
         // Resize and take key focus first, while nothing is animating — doing either mid-flight
@@ -449,135 +421,6 @@ struct UpdateBanner: View {
 /// Read the message, type an answer. Takes over the body while it's open rather than
 /// expanding inside a row: the whole point is to read something longer than a row
 /// subtitle, and competing with ten rows for height defeats that.
-struct ReplyView: View {
-    let session: Session
-    @Binding var draft: String
-    @FocusState.Binding var focused: Bool
-    let state: SendState
-    var messageHeight: CGFloat
-    var choices: [ITerm.PromptChoice] = []
-    var onChoose: (ITerm.PromptChoice) -> Void = { _ in }
-    var onSend: () -> Void
-    var onCancel: () -> Void
-
-    private var sending: Bool { state == .sending }
-
-    /// The status line does double duty: it is the hint until something happens to report.
-    private var footer: (text: String, color: Color) {
-        switch state {
-        case .idle:
-            if session.wantsDigit {
-                return (choices.isEmpty
-                        ? "no choices on screen · answer it in the terminal"
-                        : "click a choice, or type your own reply", .white.opacity(0.34))
-            }
-            return ("enter to send · shift+enter for a new line · esc to go back", .white.opacity(0.34))
-        case .sending: return ("sending…", .white.opacity(0.5))
-        case .sent:    return ("sent", statusColor("done"))
-        case .failed(let why): return (why, statusColor("waiting"))
-        }
-    }
-
-    /// Back, not dismiss: it returns you to the list with the panel still open, so it reads
-    /// as one level up rather than a close.
-    private var backButton: some View {
-        Button(action: onCancel) {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.45))
-                .frame(width: 18, height: 20)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Back to the list")
-    }
-
-    /// A light travelling across the field while the send is in flight. The round trip runs
-    /// ps and then an AppleScript, so it takes a beat; the field shouldn't look inert.
-    private var shimmer: some View {
-        TimelineView(.animation) { tl in
-            let t = tl.date.timeIntervalSinceReferenceDate
-            let p = (t.truncatingRemainder(dividingBy: 1.5)) / 1.5
-            GeometryReader { geo in
-                let w = geo.size.width
-                LinearGradient(stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .white.opacity(0.17), location: 0.5),
-                    .init(color: .clear, location: 1)
-                ], startPoint: .leading, endPoint: .trailing)
-                .frame(width: w * 0.4)
-                .offset(x: -w * 0.4 + p * (w * 1.4))
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .allowsHitTesting(false)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 7) {
-                backButton
-                StatusIndicator(status: session.status, doneAt: session.doneAt, animate: true)
-                    .frame(width: 18, height: 14)
-                Text(session.displayName)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.95))
-                    .lineLimit(1)
-                Spacer(minLength: 6)
-            }
-
-            ScrollView(.vertical, showsIndicators: true) {
-                Text(session.message.isEmpty ? "nothing captured for this session yet" : session.message)
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(session.message.isEmpty ? 0.3 : 0.72))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(height: messageHeight)
-
-            if !choices.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(choices) { choice in
-                        ChoiceRow(choice: choice, disabled: sending) { onChoose(choice) }
-                    }
-                }
-                .padding(.vertical, 5).padding(.horizontal, 5)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10).fill(statusColor("waiting").opacity(0.09)))
-            }
-
-            TextField(session.wantsDigit ? "option number" : "Reply to this session",
-                      text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)                      // grows with the reply, then scrolls
-                .font(.system(size: 13))
-                .foregroundColor(.white.opacity(sending ? 0.4 : 0.95))
-                .focused($focused)
-                .disabled(sending)
-                .onSubmit(onSend)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.white.opacity(0.05))
-                        .overlay(RoundedRectangle(cornerRadius: 10)
-                            .stroke(.white.opacity(focused ? 0.26 : 0.10), lineWidth: 1))
-                )
-                .overlay { if sending { shimmer } }
-
-            Text(footer.text)
-                .font(.system(size: 10.5))
-                .foregroundColor(footer.color)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .animation(.easeOut(duration: 0.2), value: focused)
-        .animation(.easeOut(duration: 0.2), value: state)
-        .onExitCommand(perform: onCancel)     // esc, as the hint promises
-    }
-}
-
 /// One line of a selector, clickable. The label is the terminal's own text, not something
 /// Roost composed, so what you click is literally what is on screen.
 struct ChoiceRow: View {
@@ -690,26 +533,24 @@ struct ReloadButton: View {
     }
 }
 
+/// One session. At rest it is a name and its last action. On hover the action line becomes
+/// a reply field, at the same height, so the list never reflows under the pointer. Click
+/// into that field and the row expands IN PLACE to show the full message, keeping every
+/// other row where it was. Click the name instead and you land in the terminal.
 struct RowView: View {
+    @ObservedObject var model: NotchModel
     let session: Session
     var onFocus: (Session) -> Void
     var onMute: (String) -> Void
     var onDismiss: (String) -> Void
     var onKeep: (String) -> Void = { _ in }
-    var onReply: (Session) -> Void = { _ in }
-    var onInlineSend: (Session, String) -> Void = { _, _ in }
-    var onEditing: (Bool) -> Void = { _ in }
     var offPanel: Bool = false          // a search hit that isn't on the panel right now
     var animate: Bool = true            // false while the panel is off screen
     @State private var hover = false
-    @State private var inlineDraft = ""
-    @State private var editing = false
-    @FocusState private var inlineFocused: Bool
+    @FocusState private var fieldFocused: Bool
 
-    /// The subtitle slot becomes a reply field on hover. Same 46pt row either way: the
-    /// field replaces the last-action line rather than being added below it, so the list
-    /// never reflows under the pointer.
-    private var showsField: Bool { session.replyable && (hover || editing) }
+    private var expanded: Bool { model.replyingTo == session.id }
+    private var showsField: Bool { hover || expanded }
 
     // Actionable rows sit forward, working rows sit back — carried by the whole row, not just the dot.
     private var nameOpacity: Double {
@@ -731,119 +572,167 @@ struct RowView: View {
         }
     }
 
+    private var draft: Binding<String> {
+        Binding(get: { model.drafts[session.id] ?? "" },
+                set: { model.drafts[session.id] = $0 })
+    }
+
+    private func send() {
+        let body = (model.drafts[session.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        model.onSend(session, body)
+    }
+
     var body: some View {
-        HStack(spacing: 11) {
-            StatusIndicator(status: session.status, doneAt: session.doneAt, animate: animate)
-                .frame(width: 18, height: 14)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(session.displayName)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundColor(.white.opacity(nameOpacity))
-                    .lineLimit(1)
-                if showsField {
-                    TextField("reply…", text: $inlineDraft)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.9))
-                        .focused($inlineFocused)
-                        .frame(height: 15)
-                        .onSubmit {
-                            let body = inlineDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !body.isEmpty else { return }
-                            onInlineSend(session, body)
-                            inlineDraft = ""
-                            inlineFocused = false
-                        }
-                        .onExitCommand { inlineDraft = ""; inlineFocused = false }
-                        .onChange(of: inlineFocused) { f in
-                            editing = f          // keep the field up once focused, even if
-                            onEditing(f)         // the pointer wanders off the row
-                        }
-                } else {
-                    Text(session.lastAction.isEmpty ? session.status : session.lastAction)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(actionOpacity))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 11) {
+                StatusIndicator(status: session.status, doneAt: session.doneAt, animate: animate)
+                    .frame(width: 18, height: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    // The name is the way back to the terminal. Only the name: the rest of
+                    // the row is for typing, and one stray click shouldn't yank you away.
+                    Text(session.displayName)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(nameOpacity))
                         .lineLimit(1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onFocus(session) }
+                        .help("Go to this session in the terminal")
+
+                    if showsField {
+                        TextField("reply…", text: draft)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.9))
+                            .focused($fieldFocused)
+                            .frame(height: 15)
+                            .onSubmit(send)
+                            .onExitCommand { model.closeReply() }
+                            .onChange(of: fieldFocused) { f in
+                                model.inlineEditing = f
+                                if f { model.openReply(session) }   // typing here opens the reader
+                            }
+                    } else {
+                        Text(session.lastAction.isEmpty ? session.status : session.lastAction)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(actionOpacity))
+                            .lineLimit(1)
+                    }
                 }
-            }
-            Spacer(minLength: 8)
-            // At rest: how long it's been. On hover: the controls, in the same slot.
-            // Fixed width so nothing shifts when they swap.
-            Group {
-                if hover {
-                    HStack(spacing: 0) {
-                        // Only offered when the session is parked and we know its terminal.
-                        // This is an affordance test, not a safety one: the tty guard runs
-                        // at send time, because the tab can change under us in between.
-                        if session.replyable {
-                            Button(action: { onReply(session) }) {
-                                Image(systemName: "arrowshape.turn.up.left.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.55))
+                Spacer(minLength: 8)
+                Group {
+                    if hover || expanded {
+                        HStack(spacing: 0) {
+                            Button(action: { onMute(session.id) }) {
+                                Image(systemName: session.muted ? "bell.slash.fill" : "bell.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(session.muted ? 0.85 : 0.55))
                                     .frame(width: 24, height: 24)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .help("Reply to this session")
-                        } else {
-                            // Show it greyed rather than omitting it. A missing control is a
-                            // mystery; a dead one with a reason is an explanation.
-                            Image(systemName: "arrowshape.turn.up.left")
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.16))
-                                .frame(width: 24, height: 24)
-                                .help("No terminal tab of its own — this session runs inside a "
-                                      + "multiplexer (claude agents) or in the background, so "
-                                      + "Roost can't tell which pane your text would land in.")
+                            Button(action: {
+                                if expanded { model.closeReply() }
+                                else { offPanel ? onKeep(session.id) : onDismiss(session.id) }
+                            }) {
+                                Image(systemName: expanded ? "chevron.up" : (offPanel ? "plus" : "xmark"))
+                                    .font(.system(size: offPanel && !expanded ? 11 : 10, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.55))
+                                    .frame(width: 22, height: 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(expanded ? "Collapse" : (offPanel ? "Keep on the notch" : "Remove from the notch"))
                         }
-                        Button(action: { onMute(session.id) }) {
-                            Image(systemName: session.muted ? "bell.slash.fill" : "bell.fill")
-                                .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(session.muted ? 0.85 : 0.55))
-                                .frame(width: 24, height: 24)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        // ✕ takes a row off the panel, so its inverse is +, not a pin —
-                        // "put this back", with no promise of permanence.
-                        Button(action: { offPanel ? onKeep(session.id) : onDismiss(session.id) }) {
-                            Image(systemName: offPanel ? "plus" : "xmark")
-                                .font(.system(size: offPanel ? 11 : 10, weight: .semibold))
-                                .foregroundColor(.white.opacity(offPanel ? 0.75 : 0.55))
-                                .frame(width: 22, height: 24)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(offPanel ? "Keep on the notch" : "Remove from the notch")
-                    }
-                } else {
-                    HStack(spacing: 4) {
-                        if session.muted {                            // muted is a state worth showing at rest
-                            Image(systemName: "bell.slash.fill")
-                                .font(.system(size: 9.5))
-                                .foregroundColor(.white.opacity(0.45))
-                        }
-                        TimelineView(.periodic(from: Date(), by: 15)) { tl in
-                            Text(relativeAge(session, now: tl.date))
-                                .font(.system(size: 10.5))
-                                .monospacedDigit()
-                                .foregroundColor(.white.opacity(session.status == "thinking" ? 0.22 : 0.32))
+                    } else {
+                        HStack(spacing: 4) {
+                            if session.muted {
+                                Image(systemName: "bell.slash.fill")
+                                    .font(.system(size: 9.5))
+                                    .foregroundColor(.white.opacity(0.45))
+                            }
+                            TimelineView(.periodic(from: Date(), by: 15)) { tl in
+                                Text(relativeAge(session, now: tl.date))
+                                    .font(.system(size: 10.5))
+                                    .monospacedDigit()
+                                    .foregroundColor(.white.opacity(session.status == "thinking" ? 0.22 : 0.32))
+                            }
                         }
                     }
                 }
+                .frame(width: 48, alignment: .trailing)
             }
-            .frame(width: 70, alignment: .trailing)   // fits reply + bell + ✕ without shifting
+            .frame(height: 46)
+
+            if expanded {
+                ReplyBody(session: session,
+                          choices: model.promptChoices,
+                          state: model.send,
+                          messageHeight: replyMessageHeight(for: session),
+                          onChoose: { model.onChoose(session, $0) })
+                    .padding(.bottom, 9)
+            }
         }
         .padding(.horizontal, 10)
-        .frame(height: 46)
         .background(
-            RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hover ? 0.06 : 0))
+            RoundedRectangle(cornerRadius: 14).fill(.white.opacity(expanded ? 0.07 : (hover ? 0.06 : 0)))
         )
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture { onFocus(session) }
+    }
+}
+
+/// The part that only appears once a row is expanded: what the session said, any choices it
+/// is waiting on, and how the send went. Shared with the preview harness.
+struct ReplyBody: View {
+    let session: Session
+    var choices: [ITerm.PromptChoice] = []
+    var state: SendState = .idle
+    var messageHeight: CGFloat
+    var onChoose: (ITerm.PromptChoice) -> Void = { _ in }
+
+    private var footer: (text: String, color: Color) {
+        switch state {
+        case .idle:
+            if !choices.isEmpty { return ("click a choice, or type your own reply", .white.opacity(0.34)) }
+            return ("enter to send · esc to collapse", .white.opacity(0.34))
+        case .sending: return ("sending…", .white.opacity(0.5))
+        case .sent:    return ("sent", statusColor("done"))
+        case .failed(let why): return (why, statusColor("waiting"))
+        }
     }
 
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ScrollView(.vertical, showsIndicators: true) {
+                Text(session.message.isEmpty ? "nothing captured for this session yet" : session.message)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(session.message.isEmpty ? 0.3 : 0.72))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: messageHeight)
+
+            if !choices.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(choices) { choice in
+                        ChoiceRow(choice: choice, disabled: state == .sending) { onChoose(choice) }
+                    }
+                }
+                .padding(.vertical, 5).padding(.horizontal, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(statusColor("waiting").opacity(0.09)))
+            }
+
+            Text(footer.text)
+                .font(.system(size: 10.5))
+                .foregroundColor(footer.color)
+                .lineLimit(2)
+        }
+        .padding(.leading, 29)      // line up under the name, past the status indicator
+        .animation(.easeOut(duration: 0.2), value: state)
+    }
 }
 
 // MARK: - status colour + math-driven indicators (one visual family)

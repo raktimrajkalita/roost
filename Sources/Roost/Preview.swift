@@ -67,25 +67,16 @@ private let permissionPrompt =
     "Claude needs your permission to use Bash\n\nrm -rf /Users/jay/roost/.build\n\n" +
     "Choose an option below to continue."
 
-/// One labelled card, so several states can sit side by side.
+/// One labelled card. Each builds its own NotchModel so the row renders exactly as it does
+/// in the panel, expansion and all, rather than through a parallel mock.
 private struct PreviewCard: View {
     let title: String
     let session: Session
     let state: SendState
     @ObservedObject var notes: PreviewNotes
     var choices: [ITerm.PromptChoice] = []
-    @State private var draft: String
-    @FocusState private var focused: Bool
-
-    init(title: String, session: Session, state: SendState,
-         notes: PreviewNotes, choices: [ITerm.PromptChoice] = [], draft: String = "") {
-        self.title = title
-        self.session = session
-        self.state = state
-        self.notes = notes
-        self.choices = choices
-        _draft = State(initialValue: draft)
-    }
+    var expanded: Bool = true
+    @StateObject private var model = NotchModel()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -93,16 +84,20 @@ private struct PreviewCard: View {
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.8)
                 .foregroundColor(.white.opacity(0.35))
-            ReplyView(session: session, draft: $draft, focused: $focused, state: state,
-                      messageHeight: replyMessageHeight(for: session),
-                      choices: choices,
-                      onSend: {}, onCancel: {})
-                .padding(.vertical, 11)
+            RowView(model: model, session: session,
+                    onFocus: { _ in }, onMute: { _ in }, onDismiss: { _ in })
                 .frame(width: 380)
+                .padding(.vertical, 6)
                 .background(Color.black.opacity(0.92))
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.08), lineWidth: 1))
             NoteField(text: notes.binding(title), onCommit: notes.save)
+        }
+        .onAppear {
+            model.sessions = [session]
+            model.promptChoices = choices
+            model.send = state
+            if expanded { model.replyingTo = session.id }
         }
     }
 }
@@ -127,32 +122,30 @@ private struct NoteField: View {
     }
 }
 
-/// Rows, so the new reply affordance can be checked against the existing controls.
-/// Hover a row to see them.
+/// Rows at rest, so hover and the collapsed state can be checked.
 private struct RowStrip: View {
     @ObservedObject var notes: PreviewNotes
+    @StateObject private var model = NotchModel()
+    private let rows = [
+        previewSession("waiting on you", status: "waiting", message: permissionPrompt,
+                       kind: "permission", lastAction: "Claude needs your permission to use Bash"),
+        previewSession("a long session name that runs on", status: "done", message: shortReply,
+                       kind: "input", lastAction: "Claude: Build is green. All 12 tests pass."),
+        previewSession("still working", status: "thinking", message: "", kind: "",
+                       lastAction: "Read NotchController.swift")
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("ROWS — hover to reveal the controls")
+            Text("ROWS AT REST — hover one to get its reply field")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.8)
                 .foregroundColor(.white.opacity(0.35))
             VStack(spacing: 3) {
-                RowView(session: previewSession("waiting on you", status: "waiting",
-                                                message: permissionPrompt, kind: "permission",
-                                                lastAction: "Claude needs your permission to use Bash"),
-                        onFocus: { _ in }, onMute: { _ in }, onDismiss: { _ in },
-                        onKeep: { _ in }, onReply: { _ in })
-                RowView(session: previewSession("a long session name that runs on", status: "done",
-                                                message: shortReply, kind: "input",
-                                                lastAction: "Claude: Build is green. All 12 tests pass."),
-                        onFocus: { _ in }, onMute: { _ in }, onDismiss: { _ in },
-                        onKeep: { _ in }, onReply: { _ in })
-                RowView(session: previewSession("still working", status: "thinking",
-                                                message: "", kind: "",
-                                                lastAction: "Read NotchController.swift"),
-                        onFocus: { _ in }, onMute: { _ in }, onDismiss: { _ in },
-                        onKeep: { _ in }, onReply: { _ in })
+                ForEach(rows) { r in
+                    RowView(model: model, session: r,
+                            onFocus: { _ in }, onMute: { _ in }, onDismiss: { _ in })
+                }
             }
             .frame(width: 380)
             .padding(.vertical, 8)
@@ -161,6 +154,7 @@ private struct RowStrip: View {
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.08), lineWidth: 1))
             NoteField(text: notes.binding("ROWS"), onCommit: notes.save)
         }
+        .onAppear { model.sessions = rows }
     }
 }
 
@@ -236,7 +230,7 @@ struct PreviewGallery: View {
 
                 PreviewCard(title: "sending", session: previewSession("aina main", status: "done",
                                                                      message: shortReply, kind: "input"),
-                            state: .sending, notes: notes, draft: "looks good, ship it")
+                            state: .sending, notes: notes)
 
                 PreviewCard(title: "sent", session: previewSession("aina main", status: "done",
                                                                    message: shortReply, kind: "input"),
