@@ -15,6 +15,21 @@ if let i = args.firstIndex(of: "--check-tty") {
     }
 }
 
+// Diagnostic: `Roost --tabs` lists what Roost believes is a real terminal tab.
+// A session whose tty is not in this list can never be typed into.
+if args.contains("--tabs") {
+    let sem = DispatchSemaphore(value: 0)
+    ITerm.fetchNames { names, live in
+        print("live tabs (\(live.count)):")
+        for t in live.sorted() { print("  \(t)   \(names[t] ?? "(no title)")") }
+        sem.signal()
+    }
+    while sem.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+    exit(0)
+}
+
 // Design harness for the reply UI. Developer scaffolding, off unless asked for.
 if args.contains("--preview") {
     let app = NSApplication.shared

@@ -785,6 +785,16 @@ struct RowView: View {
                             }
                             .buttonStyle(.plain)
                             .help("Reply to this session")
+                        } else {
+                            // Show it greyed rather than omitting it. A missing control is a
+                            // mystery; a dead one with a reason is an explanation.
+                            Image(systemName: "arrowshape.turn.up.left")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.16))
+                                .frame(width: 24, height: 24)
+                                .help("No terminal tab of its own — this session runs inside a "
+                                      + "multiplexer (claude agents) or in the background, so "
+                                      + "Roost can't tell which pane your text would land in.")
                         }
                         Button(action: { onMute(session.id) }) {
                             Image(systemName: session.muted ? "bell.slash.fill" : "bell.fill")

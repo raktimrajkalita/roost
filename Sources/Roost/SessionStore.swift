@@ -23,14 +23,16 @@ struct Session: Identifiable {
         return String(itermSession[range.upperBound...])
     }
 
-    /// Whether Roost can offer a reply box for this row: the session has to be parked
-    /// rather than mid-turn, and we need a terminal we know how to type into. This is a
-    /// UI affordance test only — it is NOT a safety check. The tty guard on the send
-    /// path is what decides whether typing is actually safe at that moment.
-    var replyable: Bool {
-        guard status == "waiting" || status == "done" else { return false }
-        return attached
-    }
+    /// Whether Roost can offer a reply box for this row.
+    ///
+    /// Only one requirement: the session is in a terminal window we can type into. Status
+    /// deliberately does NOT gate this. Gating on waiting/done hid the field whenever a
+    /// session was working, which is most of the time, and Claude Code queues input while
+    /// it works anyway, so there was nothing to protect against.
+    ///
+    /// This is an affordance test, not a safety check. The tty guard on the send path is
+    /// what decides whether typing is actually safe at that moment.
+    var replyable: Bool { attached }
 
     /// A numbered selector wants a digit, not prose.
     var wantsDigit: Bool { promptKind == "permission" }

@@ -56,7 +56,11 @@ enum ITerm {
             var map: [String: String] = [:]
             var live: Set<String> = []
             for line in (itermOut ?? "").split(separator: "\n") {          // iTerm: keyed by unique id
-                let parts = line.split(separator: "\t", maxSplits: 1)
+                // omittingEmptySubsequences MUST be false: a tab with no custom title emits
+                // "<tty>\t" with nothing after it, which otherwise collapses to one field
+                // and the tab is never recorded as live.
+                let parts = line.split(separator: "\t", maxSplits: 1,
+                                       omittingEmptySubsequences: false)
                 if parts.count == 2 {
                     live.insert(String(parts[0]))                     // iTerm session id
                     if let name = clean(String(parts[1])) { map[String(parts[0])] = name }
@@ -64,7 +68,11 @@ enum ITerm {
             }
             runAppleScript(terminalScript) { termOut in
                 for line in (termOut ?? "").split(separator: "\n") {       // Terminal: user's custom title, keyed by tty
-                    let parts = line.split(separator: "\t", maxSplits: 1)
+                    // omittingEmptySubsequences MUST be false: a tab with no custom title emits
+                // "<tty>\t" with nothing after it, which otherwise collapses to one field
+                // and the tab is never recorded as live.
+                let parts = line.split(separator: "\t", maxSplits: 1,
+                                       omittingEmptySubsequences: false)
                     if parts.count == 2 {
                         let tty = String(parts[0])
                         live.insert(tty)                              // a real Terminal tab
