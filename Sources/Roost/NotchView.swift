@@ -549,6 +549,12 @@ struct RowView: View {
     var animate: Bool = true            // false while the panel is off screen
     @State private var hover = false
     @State private var renaming = false
+    @State private var nameHover = false
+    /// The collapse chevron and the dismiss ✕ share one slot, so the control under your
+    /// pointer changes meaning the instant a row collapses. A second click meant for the
+    /// chevron would land on ✕. Hold-to-close would tax every dismiss to fix a window this
+    /// narrow; instead the ✕ is simply inert for a moment after a collapse.
+    @State private var justCollapsed = false
     @State private var nameDraft = ""
     @FocusState private var fieldFocused: Bool
     @FocusState private var nameFocused: Bool
@@ -631,20 +637,47 @@ struct RowView: View {
                             }
                             .onExitCommand { renaming = false }
                     } else {
+                        HStack(spacing: 6) {
                         Text(session.displayName)
                             .font(.system(size: 13.5, weight: .semibold))
                             .foregroundColor(.white.opacity(nameOpacity))
                             .lineLimit(1)
                             .contentShape(Rectangle())
-                            // Single click goes to the terminal, double click renames. The
-                            // rename has to win, so the double tap is declared first.
-                            .onTapGesture(count: 2) {
+                            // Rename is offered only while expanded. Collapsed, a single
+                            // click jumps to the terminal, and a second gesture on the same
+                            // target would make that jump feel like a misfire.
+                            .modifier(RenameGesture(enabled: expanded) {
                                 nameDraft = session.displayName
                                 renaming = true
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { nameFocused = true }
-                            }
+                            })
                             .onTapGesture { onFocus(session) }
-                            .help("Click to go to the terminal · double-click to rename")
+                            .help(expanded
+                                  ? "Click to go to the terminal · double-click to rename"
+                                  : "Go to this session in the terminal")
+
+                        // Only while expanded, and only under the pointer: renaming is a rare
+                        // act, so it earns an icon but not permanent space.
+                        if expanded && nameHover {
+                            Button(action: {
+                                nameDraft = session.displayName
+                                renaming = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { nameFocused = true }
+                            }) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.5))
+                                    .frame(width: 16, height: 16)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Rename this session")
+                            .transition(.opacity)
+                        }
+                        Spacer(minLength: 0)
+                        }
+                        .onHover { nameHover = $0 }
+                        .animation(.easeOut(duration: 0.15), value: nameHover)
                     }
 
                     if showsInlineField {
@@ -692,13 +725,18 @@ struct RowView: View {
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
                                         model.closeReply()
                                     }
-                                } else {
+                                    justCollapsed = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                                        justCollapsed = false
+                                    }
+                                } else if !justCollapsed {
                                     offPanel ? onKeep(session.id) : onDismiss(session.id)
                                 }
                             }) {
                                 Image(systemName: expanded ? "chevron.up" : (offPanel ? "plus" : "xmark"))
                                     .font(.system(size: offPanel && !expanded ? 11 : 10, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.55))
+                                    // dimmed while inert, so it reads as "not yet" rather than broken
+                                    .foregroundColor(.white.opacity(justCollapsed && !expanded ? 0.18 : 0.55))
                                     .frame(width: 22, height: 24)
                                     .contentShape(Rectangle())
                             }
@@ -757,17 +795,30 @@ struct RowView: View {
                         .padding(.leading, 29)
                 }
                 .padding(.bottom, 9)
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .top)),
-                    removal: .opacity))
+                .fixedSize(horizontal: false, vertical: true)
+                .clipped()                      // nothing may paint outside its own band
+                .transition(.opacity)
             }
         }
         .padding(.horizontal, 10)
         .background(
             RoundedRectangle(cornerRadius: 14).fill(.white.opacity(expanded ? 0.07 : (hover ? 0.06 : 0)))
         )
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
+    }
+}
+
+/// Attaches the rename double-click only when it should exist. Applying a gesture
+/// conditionally inline changes the view's identity and drops focus mid-edit; a modifier
+/// keeps one view and swaps only the gesture.
+struct RenameGesture: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+    func body(content: Content) -> some View {
+        if enabled { content.onTapGesture(count: 2, perform: action) }
+        else { content }
     }
 }
 

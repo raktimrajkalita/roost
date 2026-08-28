@@ -122,14 +122,17 @@ private struct NoteField: View {
     }
 }
 
-/// Rows at rest, so hover and the collapsed state can be checked.
+/// Live rows. Dismiss actually removes, collapse actually collapses, so the shared
+/// chevron/✕ slot can be exercised for real rather than against stub callbacks.
 private struct RowStrip: View {
     @ObservedObject var notes: PreviewNotes
     @StateObject private var model = NotchModel()
-    private let rows = [
+    @State private var shown: [Session] = RowStrip.seed
+
+    static let seed = [
         previewSession("waiting on you", status: "waiting", message: permissionPrompt,
                        kind: "permission", lastAction: "Claude needs your permission to use Bash"),
-        previewSession("a long session name that runs on", status: "done", message: shortReply,
+        previewSession("a long session name that runs on", status: "done", message: longReply,
                        kind: "input", lastAction: "Claude: Build is green. All 12 tests pass."),
         previewSession("still working", status: "thinking", message: "", kind: "",
                        lastAction: "Read NotchController.swift")
@@ -137,14 +140,44 @@ private struct RowStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("ROWS AT REST — hover one to get its reply field")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundColor(.white.opacity(0.35))
+            HStack(spacing: 10) {
+                Text("LIVE ROWS — hover, expand, collapse, dismiss")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundColor(.white.opacity(0.35))
+                Spacer()
+                if shown.count < RowStrip.seed.count {
+                    Button(action: { shown = RowStrip.seed; model.sessions = shown }) {
+                        Text("restore")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 9).padding(.vertical, 3)
+                            .background(Capsule().fill(Color(red: 0.48, green: 0.64, blue: 1.0)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(width: 380)
+
             VStack(spacing: 3) {
-                ForEach(rows) { r in
-                    RowView(model: model, session: r,
-                            onFocus: { _ in }, onMute: { _ in }, onDismiss: { _ in })
+                if shown.isEmpty {
+                    Text("all dismissed — hit restore")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.35))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                } else {
+                    ForEach(shown) { r in
+                        RowView(model: model, session: r,
+                                onFocus: { _ in },
+                                onMute: { _ in },
+                                onDismiss: { id in
+                                    withAnimation(.easeInOut(duration: 0.28)) {
+                                        shown.removeAll { $0.id == id }
+                                        model.sessions = shown
+                                    }
+                                })
+                    }
                 }
             }
             .frame(width: 380)
@@ -154,7 +187,7 @@ private struct RowStrip: View {
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.08), lineWidth: 1))
             NoteField(text: notes.binding("ROWS"), onCommit: notes.save)
         }
-        .onAppear { model.sessions = rows }
+        .onAppear { model.sessions = shown }
     }
 }
 
