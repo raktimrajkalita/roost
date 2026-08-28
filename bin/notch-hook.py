@@ -17,6 +17,7 @@ SOUNDS = os.path.join(ROOT, "sounds")
 MUTED = os.path.join(ROOT, "muted")           # touch this file to mute sound
 DISABLED = os.path.join(ROOT, "disabled")     # touch this file to silence everything
 MUTE_DIR = os.path.join(ROOT, "mutes")        # per-session mute flags (mutes/<fid>)
+MAX_MSG = 4000                                # full message kept for the panel; last_action stays short
 
 os.makedirs(STATE, exist_ok=True)
 os.makedirs(MUTE_DIR, exist_ok=True)
@@ -142,8 +143,16 @@ def _extract_text(content):
 
 
 def last_assistant_text(path):
-    """Pull Claude's final reply text from the session transcript (JSONL).
-    Reads only the tail of the file so it's fast even on long sessions."""
+    """Claude's final reply for the CURRENT turn, or None if it isn't written yet.
+
+    Returning None matters more than returning something. The Stop hook can fire in the
+    same second the transcript is flushed, and the naive "last assistant message in the
+    file" is then the PREVIOUS turn's reply — truthy, stale, and indistinguishable from a
+    good read. So anchor on position: a reply only counts if it appears after the last
+    user entry. If it doesn't, the turn hasn't landed yet and the caller should retry.
+
+    Reads only the tail of the file so it stays fast on long sessions.
+    """
     if not path or not os.path.exists(path):
         return None
     try:
@@ -153,8 +162,10 @@ def last_assistant_text(path):
                 f.seek(size - 200000)
                 f.readline()                  # drop the partial first line
             blob = f.read().decode("utf-8", "replace")
-        last = None
-        for line in blob.splitlines():
+
+        last_user = -1
+        replies = []                          # (line index, text)
+        for i, line in enumerate(blob.splitlines()):
             line = line.strip()
             if not line:
                 continue
@@ -163,14 +174,52 @@ def last_assistant_text(path):
             except Exception:
                 continue
             msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
-            is_assistant = obj.get("type") == "assistant" or (isinstance(msg, dict) and msg.get("role") == "assistant")
-            if is_assistant and isinstance(msg, dict):
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            if obj.get("type") == "user" or role == "user":
+                last_user = i             # includes tool results, which is correct: they
+                continue                  # still separate one reply chunk from the next
+            if obj.get("type") == "assistant" or role == "assistant":
                 text = _extract_text(msg.get("content"))
                 if text:
-                    last = text
-        return last
+                    replies.append((i, text))
+
+        for i, text in reversed(replies):
+            if i > last_user:
+                return text
+        return None                           # reply for this turn hasn't been flushed yet
     except Exception:
         return None
+
+
+def assistant_text_settled(path, tries=8, delay=0.2):
+    """last_assistant_text, but tolerant of the transcript still being flushed.
+
+    The Stop hook can fire before Claude's final message has been written to the JSONL,
+    which silently loses the reply. Retry briefly instead. Worst case ~1.6s, inside the
+    hook's 5s timeout, and the chime has already played by the time we get here."""
+    for i in range(tries):
+        text = last_assistant_text(path)
+        if text:
+            return text
+        if i < tries - 1:
+            time.sleep(delay)
+    return None
+
+
+def classify_prompt(msg):
+    """What kind of answer the session is blocked on.
+
+    'permission' means a numbered selector, which a digit answers, not prose.
+    'input' means free text is expected. Deliberately conservative: anything we
+    can't positively identify as a permission popup is treated as free text, so
+    Roost never sends a bare digit at something that wanted a sentence."""
+    low = (msg or "").lower()
+    for marker in ("permission", "approve", "wants to use", "allow"):
+        if marker in low:
+            return "permission"
+    return "input"
 
 
 def main():
@@ -209,25 +258,32 @@ def main():
         "term_session": os.environ.get("TERM_SESSION_ID", ""),
         "term_program": os.environ.get("TERM_PROGRAM", ""),
         "tty": controlling_tty(),
+        "transcript_path": data.get("transcript_path") or state.get("transcript_path", ""),
         "updated": time.time(),
     })
 
     if event == "tool":
         state["status"] = "thinking"
         state["last_action"] = short_action(data)
+        state["prompt_kind"] = ""            # nothing to answer while it works
+        state["message"] = ""
     elif event == "working":
         state["status"] = "thinking"
+        state["prompt_kind"] = ""
+        state["message"] = ""                # drop the previous turn's text rather than show it stale
         p = data.get("prompt")
         if p:
             state["last_action"] = "You: " + str(p).strip().split("\n")[0][:48]
     elif event == "done":
         state["status"] = "done"
         state["done_at"] = time.time()
-        reply = last_assistant_text(data.get("transcript_path"))
+        if not smuted:
+            play("done.wav")   # chime first — it must not queue behind the transcript read below
+        reply = assistant_text_settled(data.get("transcript_path"))
         if reply:
             state["last_action"] = "Claude: " + " ".join(reply.split())[:200]
-        if not smuted:
-            play("done.wav")   # the chime + notch panel are the notification (no macOS banner)
+            state["message"] = reply[:MAX_MSG]   # full text, for the panel to expand
+            state["prompt_kind"] = "input"       # a finished turn takes a free-text follow-up
     elif event == "waiting":
         # Claude Code's Notification hook fires for two different things:
         #   (a) a real permission / answer popup ("... needs your permission ..."),
@@ -238,9 +294,16 @@ def main():
         low = msg.lower()
         if "waiting for" in low and "input" in low:
             state["status"] = "done"          # idle after completion, not a real prompt
+            # Keep Claude's reply: this ping lands ~60s after a turn ends, and that text is
+            # exactly what the panel wants to show. Only a stale popup gets dropped.
+            if state.get("prompt_kind") == "permission":
+                state["message"] = ""
+            state["prompt_kind"] = "idle"     # at the prompt box, so free text, not a digit
         else:
             state["status"] = "waiting"       # a genuine popup asking you to answer
             state["last_action"] = (msg or "needs your reply")[:60]
+            state["message"] = msg[:MAX_MSG]
+            state["prompt_kind"] = classify_prompt(msg)
             if not smuted:
                 play("waiting.wav")   # chime only, no macOS banner
 

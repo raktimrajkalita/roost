@@ -13,11 +13,26 @@ struct Session: Identifiable {
     var doneAt: Double = 0  // when it finished — the done indicator resolves once from here, then rests
     var displayName: String // resolved iTerm tab name, or project
     var muted: Bool = false
+    var message: String = ""          // full reply or prompt text — what the reply view shows
+    var transcriptPath: String = ""
+    var promptKind: String = ""       // permission | input | idle | ""
 
     var itermUUID: String? {
         guard let range = itermSession.range(of: ":") else { return nil }
         return String(itermSession[range.upperBound...])
     }
+
+    /// Whether Roost can offer a reply box for this row: the session has to be parked
+    /// rather than mid-turn, and we need a terminal we know how to type into. This is a
+    /// UI affordance test only — it is NOT a safety check. The tty guard on the send
+    /// path is what decides whether typing is actually safe at that moment.
+    var replyable: Bool {
+        guard status == "waiting" || status == "done" else { return false }
+        return itermUUID != nil || !tty.isEmpty
+    }
+
+    /// A numbered selector wants a digit, not prose.
+    var wantsDigit: Bool { promptKind == "permission" }
 
     var statusGlyph: String {
         switch status {
@@ -160,6 +175,9 @@ final class SessionStore {
             )
             s.tty = (obj["tty"] as? String) ?? ""
             s.doneAt = (obj["done_at"] as? Double) ?? updated
+            s.message = (obj["message"] as? String) ?? ""
+            s.transcriptPath = (obj["transcript_path"] as? String) ?? ""
+            s.promptKind = (obj["prompt_kind"] as? String) ?? ""
             if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }   // iTerm session name
             else if !s.tty.isEmpty, let name = names[s.tty] { s.displayName = name }      // Terminal.app custom title (rename)
             let fid = (f as NSString).deletingPathExtension
@@ -195,7 +213,8 @@ final class SessionStore {
         for i in a.indices {
             if a[i].id != b[i].id || a[i].status != b[i].status
                 || a[i].lastAction != b[i].lastAction || a[i].displayName != b[i].displayName
-                || a[i].muted != b[i].muted { return false }
+                || a[i].muted != b[i].muted
+                || a[i].message != b[i].message || a[i].promptKind != b[i].promptKind { return false }
         }
         return true
     }
