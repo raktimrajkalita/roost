@@ -9,7 +9,13 @@ enum ITerm {
     /// "(job)" stripped), plus Terminal.app custom titles (the user's rename) keyed by tty.
     /// Both scripts are guarded by `is running` so a background refresh never launches a
     /// terminal that's closed.
-    static func fetchNames(_ completion: @escaping ([String: String]) -> Void) {
+    /// Names, plus the set of ttys that are actually terminal tabs.
+    ///
+    /// The second half matters more than it looks. A session's tty is not necessarily a
+    /// visible tab: Claude Code's daemon runs background sessions on a pty owned by
+    /// `claude bg-spare`, which is a real tty device attached to no window at all. Those
+    /// sessions can never receive typed input, so the panel must not offer it.
+    static func fetchNames(_ completion: @escaping ([String: String], Set<String>) -> Void) {
         let itermScript = """
         set d to tab
         set lf to linefeed
@@ -39,9 +45,7 @@ enum ITerm {
                 try
                   set ct to custom title of t
                 end try
-                if ct is not missing value and ct is not "" then
-                  set out to out & (tty of t) & d & ct & lf
-                end if
+                set out to out & (tty of t) & d & ct & lf
               end repeat
             end repeat
           end tell
@@ -50,21 +54,25 @@ enum ITerm {
         """
         runAppleScript(itermScript) { itermOut in
             var map: [String: String] = [:]
+            var live: Set<String> = []
             for line in (itermOut ?? "").split(separator: "\n") {          // iTerm: keyed by unique id
                 let parts = line.split(separator: "\t", maxSplits: 1)
-                if parts.count == 2, let name = clean(String(parts[1])) {
-                    map[String(parts[0])] = name
+                if parts.count == 2 {
+                    live.insert(String(parts[0]))                     // iTerm session id
+                    if let name = clean(String(parts[1])) { map[String(parts[0])] = name }
                 }
             }
             runAppleScript(terminalScript) { termOut in
                 for line in (termOut ?? "").split(separator: "\n") {       // Terminal: user's custom title, keyed by tty
                     let parts = line.split(separator: "\t", maxSplits: 1)
                     if parts.count == 2 {
+                        let tty = String(parts[0])
+                        live.insert(tty)                              // a real Terminal tab
                         let title = String(parts[1]).trimmingCharacters(in: .whitespaces)
-                        if !title.isEmpty { map[String(parts[0])] = title }
+                        if !title.isEmpty { map[tty] = title }
                     }
                 }
-                DispatchQueue.main.async { completion(map) }
+                DispatchQueue.main.async { completion(map, live) }
             }
         }
     }
@@ -358,7 +366,7 @@ enum ITerm {
             let value = out?.stringValue ?? ""
             DispatchQueue.main.async {
                 if error != nil { completion(.refused("the terminal refused the message")) }
-                else if value != "ok" { completion(.refused("couldn't find that tab any more")) }
+                else if value != "ok" { completion(.refused("that session has no terminal window")) }
                 else { completion(.ok) }
             }
         }

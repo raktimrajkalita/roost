@@ -16,6 +16,7 @@ struct Session: Identifiable {
     var message: String = ""          // full reply or prompt text — what the reply view shows
     var transcriptPath: String = ""
     var promptKind: String = ""       // permission | input | idle | ""
+    var attached: Bool = false        // its tty really is a terminal tab we can type into
 
     var itermUUID: String? {
         guard let range = itermSession.range(of: ":") else { return nil }
@@ -28,7 +29,7 @@ struct Session: Identifiable {
     /// path is what decides whether typing is actually safe at that moment.
     var replyable: Bool {
         guard status == "waiting" || status == "done" else { return false }
-        return itermUUID != nil || !tty.isEmpty
+        return attached
     }
 
     /// A numbered selector wants a digit, not prose.
@@ -69,6 +70,7 @@ final class SessionStore {
     private var keptIds: Set<String> = []                 // pulled back onto the panel from search
     private var pollTimer: Timer?
     private var names: [String: String] = [:]   // iTerm uuid -> cleaned tab name
+    private var liveTabs: Set<String> = []      // ttys / session ids that are real tabs
 
     // MARK: lifecycle
 
@@ -178,6 +180,10 @@ final class SessionStore {
             s.message = (obj["message"] as? String) ?? ""
             s.transcriptPath = (obj["transcript_path"] as? String) ?? ""
             s.promptKind = (obj["prompt_kind"] as? String) ?? ""
+            // A tty alone proves nothing: background sessions run on a daemon-owned pty
+            // that belongs to no window. Only a tty the terminal itself lists can be typed into.
+            s.attached = (s.itermUUID.map { liveTabs.contains($0) } ?? false)
+                      || (!s.tty.isEmpty && liveTabs.contains(s.tty))
             if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }   // iTerm session name
             else if !s.tty.isEmpty, let name = names[s.tty] { s.displayName = name }      // Terminal.app custom title (rename)
             let fid = (f as NSString).deletingPathExtension
@@ -214,7 +220,8 @@ final class SessionStore {
             if a[i].id != b[i].id || a[i].status != b[i].status
                 || a[i].lastAction != b[i].lastAction || a[i].displayName != b[i].displayName
                 || a[i].muted != b[i].muted
-                || a[i].message != b[i].message || a[i].promptKind != b[i].promptKind { return false }
+                || a[i].message != b[i].message || a[i].promptKind != b[i].promptKind
+                || a[i].attached != b[i].attached { return false }
         }
         return true
     }
@@ -222,10 +229,11 @@ final class SessionStore {
     // MARK: iTerm tab names (placeholder — wired to AppleScript next)
 
     private func refreshNames() {
-        ITerm.fetchNames { [weak self] map in
+        ITerm.fetchNames { [weak self] map, live in
             guard let self else { return }
-            if map != self.names {
+            if map != self.names || live != self.liveTabs {
                 self.names = map
+                self.liveTabs = live
                 self.reload()
             }
         }
