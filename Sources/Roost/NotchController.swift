@@ -78,11 +78,23 @@ final class NotchController {
             NSApp.activate(ignoringOtherApps: true)
             self.panel.makeKeyAndOrderFront(nil)
             self.startClickAway()
+            // A numbered prompt's choices only exist on screen, so go and read them.
+            self.model.promptChoices = []
+            if let t = self.model.replyTarget, t.wantsDigit {
+                ITerm.promptChoices(for: t) { choices in
+                    guard self.model.replyingTo == t.id else { return }   // moved on since
+                    self.model.promptChoices = choices
+                    self.relayout(allowShrink: false)
+                }
+            }
         }
         model.onReplyDidClose = { [weak self] in
             guard let self else { return }
             self.stopClickAway()
             NSApp.deactivate()
+            // Going back lands on the list, so hold the panel there briefly. Without this
+            // it collapses the instant you leave, which reads as a dismiss, not a back.
+            self.pinnedUntil = Date().addingTimeInterval(2.5)
             self.layoutWork?.cancel()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 self.relayout(allowShrink: true)
@@ -104,6 +116,41 @@ final class NotchController {
                     }
                 case .refused(let why):
                     self.model.send = .failed(why)
+                }
+            }
+        }
+        model.onInlineSend = { [weak self] session, text in
+            guard let self else { return }
+            ITerm.send(text: text, to: session) { result in
+                if case .refused(let why) = result {
+                    // Nothing in a row can explain a refusal, so escalate into the full
+                    // view: it shows the reason and keeps the draft, rather than swallowing
+                    // both and leaving you wondering whether it sent.
+                    self.model.draft = text
+                    self.model.send = .failed(why)
+                    self.model.replyingTo = session.id
+                    self.model.onReplyWillOpen()
+                }
+            }
+        }
+        model.onChoose = { [weak self] session, choice in
+            guard let self else { return }
+            self.model.send = .sending
+            ITerm.choose(choice, in: session) { result in
+                switch result {
+                case .ok:
+                    self.model.send = .sent
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                        if self.model.send == .sent { self.closeReply() }
+                    }
+                case .refused(let why):
+                    self.model.send = .failed(why)
+                    // Refused means the list moved, so re-read: what is on screen now is
+                    // not what was clicked, and showing the stale list invites a second
+                    // wrong click.
+                    ITerm.promptChoices(for: session) { fresh in
+                        if self.model.replyingTo == session.id { self.model.promptChoices = fresh }
+                    }
                 }
             }
         }
@@ -363,6 +410,7 @@ final class NotchController {
         guard model.replyingTo != nil else { return }
         stopClickAway()
         withAnimation(.easeOut(duration: 0.2)) { model.replyingTo = nil }
+        model.promptChoices = []
         model.draft = ""
         model.send = .idle
         NSApp.deactivate()
@@ -420,6 +468,7 @@ final class NotchController {
         if inside { lastInside = now }
         let want = inside
             || model.replyingTo != nil          // never yank the panel away mid-reply
+            || model.inlineEditing              // ...or while a row's own field has focus
             || model.searching                  // never yank the panel away mid-search
             || now < pinnedUntil
             || (visible && now.timeIntervalSince(lastInside) < 0.25)

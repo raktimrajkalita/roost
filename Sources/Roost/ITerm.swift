@@ -132,6 +132,134 @@ enum ITerm {
         runAppleScript("tell application \"\(app)\" to activate", completion: { _ in })
     }
 
+    // MARK: reading the screen
+
+    /// One line of a selector the session is showing.
+    ///
+    /// `offset` is steps DOWN from whatever is currently highlighted, which is how an
+    /// unnumbered list has to be addressed: there is no name to send, only movement.
+    struct PromptChoice: Equatable, Identifiable {
+        let offset: Int
+        let label: String
+        let digit: Int?          // nil when the list isn't numbered
+        var id: Int { offset }
+        var selected: Bool { offset == 0 }
+    }
+
+    /// The choices a selector is showing, read off the terminal itself.
+    ///
+    /// Claude Code's Notification payload carries only prose ("needs your permission to
+    /// use Bash"), never the choices, so they exist nowhere except on screen.
+    static func promptChoices(for session: Session, completion: @escaping ([PromptChoice]) -> Void) {
+        readScreen(for: session) { screen in
+            DispatchQueue.main.async { completion(parseChoices(screen ?? "")) }
+        }
+    }
+
+    static func readScreen(for session: Session, completion: @escaping (String?) -> Void) {
+        let script: String
+        switch session.termProgram {
+        case "iTerm.app":
+            guard let uuid = session.itermUUID else { completion(nil); return }
+            script = """
+            tell application "iTerm2"
+              repeat with w in windows
+                repeat with t in tabs of w
+                  repeat with sess in sessions of t
+                    if (unique id of sess) is "\(escaped(uuid))" then return text of sess
+                  end repeat
+                end repeat
+              end repeat
+            end tell
+            return ""
+            """
+        default:
+            script = """
+            tell application "Terminal"
+              repeat with w in windows
+                repeat with t in tabs of w
+                  if tty of t is "\(escaped(session.tty))" then return history of t
+                end repeat
+              end repeat
+            end tell
+            return ""
+            """
+        }
+        runAppleScript(script, completion: completion)
+    }
+
+    /// Anchor on the ❯ cursor and read forward. Reading BACKWARD would be guesswork: the
+    /// line above a selector is prose ("Security guide"), indistinguishable from an option
+    /// by shape alone, and mistaking one for an option shifts every offset by one, which is
+    /// how you end up confirming the wrong answer.
+    static func parseChoices(_ screen: String) -> [PromptChoice] {
+        let lines = screen.suffix(4000).split(separator: "\n", omittingEmptySubsequences: false)
+                          .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let cursor = lines.lastIndex(where: { $0.hasPrefix("❯") }) else { return [] }
+
+        var out: [PromptChoice] = []
+        for j in cursor..<lines.count {
+            var line = lines[j]
+            if j == cursor { line = String(line.dropFirst()).trimmingCharacters(in: .whitespaces) }
+            if line.isEmpty { break }
+            if line.count > 120 { break }
+            if line.contains("Enter to confirm") || line.contains("Esc to cancel") { break }
+
+            var digit: Int? = nil
+            let lead = line.prefix(while: { $0.isNumber })
+            if !lead.isEmpty, line.dropFirst(lead.count).hasPrefix(".") { digit = Int(lead) }
+            out.append(PromptChoice(offset: j - cursor, label: line, digit: digit))
+        }
+        return out.count >= 2 ? out : []      // a single line isn't a choice
+    }
+
+    /// Answer a selector by picking one of its lines.
+    ///
+    /// Re-reads the screen first and refuses if the list moved under us. The gap between
+    /// showing you a choice and you clicking it is long enough for the session to have
+    /// moved on, and a stale offset lands on whatever is there now.
+    static func choose(_ choice: PromptChoice, in session: Session,
+                       completion: @escaping (SendResult) -> Void) {
+        let check = foregroundCheck(tty: session.tty)
+        if case .refused = check { completion(check); return }
+
+        promptChoices(for: session) { fresh in
+            guard let now = fresh.first(where: { $0.offset == choice.offset }),
+                  now.label == choice.label else {
+                completion(.refused("that prompt changed, look again"))
+                return
+            }
+            let payload: String
+            if let d = now.digit {
+                payload = "\"\(d)\""                                   // numbered: unambiguous
+            } else if now.offset == 0 {
+                payload = "\"\""                                       // already highlighted
+            } else {
+                // (ASCII character 27) & "[B" is a down arrow; do script's own return confirms.
+                payload = Array(repeating: "((ASCII character 27) & \"[B\")", count: now.offset)
+                              .joined(separator: " & ")
+            }
+            let script = """
+            tell application "Terminal"
+              repeat with w in windows
+                repeat with t in tabs of w
+                  if tty of t is "\(escaped(session.tty))" then
+                    do script \(payload) in t
+                    return "ok"
+                  end if
+                end repeat
+              end repeat
+            end tell
+            return "gone"
+            """
+            runAppleScript(script) { out in
+                DispatchQueue.main.async {
+                    completion(out == "ok" ? .ok : .refused("couldn't reach that tab"))
+                }
+            }
+        }
+    }
+
     // MARK: sending
 
     /// Outcome of a send attempt, so the panel can say what went wrong instead of failing silently.
@@ -200,9 +328,12 @@ enum ITerm {
     /// stages, the second sends.
     static func send(text: String, to session: Session, submit: Bool = true,
                      completion: @escaping (SendResult) -> Void) {
-        let body = text.split(whereSeparator: { $0.isNewline || $0 == "\r" })
-                       .joined(separator: " ")
-                       .trimmingCharacters(in: .whitespaces)
+        // Newlines are kept. Verified against the TUI: a multi-line paste arrives as one
+        // prompt with its line breaks intact, not as several submitted lines. The trailing
+        // submit is still sent either way; a redundant Enter on an empty box does nothing.
+        let body = text.replacingOccurrences(of: "\r\n", with: "\n")
+                       .replacingOccurrences(of: "\r", with: "\n")
+                       .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { completion(.refused("nothing to send")); return }
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -269,10 +400,15 @@ enum ITerm {
         """
     }
 
-    /// AppleScript string literals need both of these escaped, in this order.
+    /// Make a Swift string safe inside an AppleScript string literal.
+    ///
+    /// Order matters: backslashes first, then quotes. Newlines can't appear in an
+    /// AppleScript literal at all, so they're spliced out into `& linefeed &` instead,
+    /// which is what lets a multi-line reply survive the trip.
     private static func escaped(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\")
          .replacingOccurrences(of: "\"", with: "\\\"")
+         .replacingOccurrences(of: "\n", with: "\" & linefeed & \"")
     }
 
     // MARK: helpers

@@ -15,6 +15,16 @@ if let i = args.firstIndex(of: "--check-tty") {
     }
 }
 
+// Design harness for the reply UI. Developer scaffolding, off unless asked for.
+if args.contains("--preview") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)          // a normal window, so it can take focus
+    let preview = PreviewController()
+    app.delegate = preview
+    app.run()
+    exit(0)
+}
+
 let app = NSApplication.shared
 let controller = AppController()
 app.delegate = controller
