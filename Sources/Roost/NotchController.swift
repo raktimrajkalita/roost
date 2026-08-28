@@ -23,6 +23,7 @@ final class NotchController {
     private var hideWork: DispatchWorkItem?
     private var layoutWork: DispatchWorkItem?
     private var clickAway: Any?          // global mouse monitor while searching
+    private var magnet: MagnetController?
     private var updatePoll: Timer?       // reads the updater's progress file
     private var realPct = 0              // last milestone the updater actually reported
     private var stepStart = Date()       // when that milestone landed
@@ -144,6 +145,13 @@ final class NotchController {
         model.onUpdateNow = { [weak self] in self?.startUpdate() }
         model.onUpdateDismiss = { [weak self] in self?.setUpdate(.none) }
         buildPanel()
+        // The liquid notch is off by default while we work out whether it is what is upsetting
+        // the panel. It is an always-on overlay window at screenSaver level sitting over the
+        // menu bar, so it is the first thing to take out of the picture, not the last.
+        // ROOST_MAGNET=1 puts it back; the preview harness always shows it.
+        if ProcessInfo.processInfo.environment["ROOST_MAGNET"] == "1" {
+            magnet = MagnetController(notchRect: notchRect(), notchHeight: notchHeight)
+        }
         refresh()
         showInstalledIfJustUpdated()
         // quiet check shortly after launch, then daily
@@ -225,8 +233,16 @@ final class NotchController {
     private func updateContent() {
         model.notchHeight = notchHeight
         // rows animate in/out (dismiss and refresh both swipe them off to the trailing edge);
-        // unchanged rows are matched by id and just slide into their new slot
-        withAnimation(.easeInOut(duration: rowAnim)) {
+        // unchanged rows are matched by id and just slide into their new slot.
+        //
+        // Except while a row is expanded. A working session rewrites its last action every
+        // second, which re-runs this animation under the reader and reads as stutter: the
+        // list keeps restarting a 0.28s easeInOut while you are trying to read and type in it.
+        if model.replyingTo == nil {
+            withAnimation(.easeInOut(duration: rowAnim)) {
+                model.sessions = store.sessions
+            }
+        } else {
             model.sessions = store.sessions
         }
         let f = panelFrame()                     // collapsed target = the physical notch, as a fraction of the full panel
@@ -391,17 +407,32 @@ final class NotchController {
     }
 
     /// Clicked outside, or the send landed: drop the reply view and put the panel away.
+    /// Clicked away, or the reply landed: the row closes AND the panel goes away.
+    ///
+    /// One animation, not three. Doing it the obvious way ran a 0.2s row collapse, then the
+    /// panel's own 0.34s scale-down as the hover loop noticed the pointer was gone, then a
+    /// 0.34s window shrink 0.3s later — all overlapping, so the window resized underneath
+    /// content that was still animating and the rows came out squashed and clipped.
+    ///
+    /// The row just closes, with no animation of its own, because the panel collapsing over
+    /// it is the animation. The frame is put right afterwards, once nothing is on screen to
+    /// see it move.
     private func closeReply() {
         guard model.replyingTo != nil else { return }
         stopClickAway()
-        withAnimation(.easeOut(duration: 0.2)) { model.replyingTo = nil }
+        model.replyingTo = nil
         model.promptChoices = []
         model.send = .idle
+        model.inlineEditing = false
         NSApp.deactivate()
         pinnedUntil = .distantPast
         lastInside = .distantPast
         layoutWork?.cancel()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { self.relayout(allowShrink: true) }
+        hide()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, !self.visible else { return }      // still hidden: safe to resize
+            self.panel.setFrame(self.panelFrame(), display: false, animate: false)
+        }
     }
 
     /// Clicked outside: leave search and put the panel away entirely.
@@ -433,6 +464,15 @@ final class NotchController {
             }
             if abs(target.height - self.panel.frame.height) < 0.5 { return }
             target.origin.x = self.panel.frame.origin.x
+
+            // Growing is instant. The window is transparent and top-anchored, so extra height
+            // is invisible until SwiftUI draws into it; animating it too puts a 0.34s easeOut
+            // window edge against a 0.3 spring content edge, on different clocks, and the
+            // mismatch is exactly the judder you see while a row opens.
+            if target.height > self.panel.frame.height {
+                self.panel.setFrame(target, display: true, animate: false)
+                return
+            }
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.34
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -450,6 +490,14 @@ final class NotchController {
         let overPanel = visible && panel.frame.contains(m)
         let inside = inTrigger || overPanel
         if inside { lastInside = now }
+        // The liquid edge answers the pointer well before the panel does, so it is driven
+        // from the same loop but with its own, larger radius.
+        if let magnet {
+            let n = notchRect()
+            let near = hypot(m.x - n.midX, m.y - n.midY) < magnet.reach + 40
+            magnet.update(pointerNear: near, panelVisible: visible)
+        }
+
         let want = inside
             || model.replyingTo != nil          // never yank the panel away mid-reply
             || model.inlineEditing              // ...or while a row's own field has focus

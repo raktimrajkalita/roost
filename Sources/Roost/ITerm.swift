@@ -15,6 +15,10 @@ enum ITerm {
     /// visible tab: Claude Code's daemon runs background sessions on a pty owned by
     /// `claude bg-spare`, which is a real tty device attached to no window at all. Those
     /// sessions can never receive typed input, so the panel must not offer it.
+    /// Last known set of real terminal tabs, kept so the send path can look for a host
+    /// without waiting on another AppleScript round trip.
+    private(set) static var liveTabs: Set<String> = []
+
     static func fetchNames(_ completion: @escaping ([String: String], Set<String>) -> Void) {
         let itermScript = """
         set d to tab
@@ -80,6 +84,7 @@ enum ITerm {
                         if !title.isEmpty { map[tty] = title }
                     }
                 }
+                liveTabs = live
                 DispatchQueue.main.async { completion(map, live) }
             }
         }
@@ -170,6 +175,116 @@ enum ITerm {
         readScreen(for: session) { screen in
             DispatchQueue.main.async { completion(parseChoices(screen ?? "")) }
         }
+    }
+
+    /// The ttys Terminal is showing right now.
+    static func liveTabsSync() -> Set<String> {
+        let script = """
+        set d to linefeed
+        set out to ""
+        if application "Terminal" is running then
+          tell application "Terminal"
+            repeat with w in windows
+              repeat with t in tabs of w
+                set out to out & (tty of t) & d
+              end repeat
+            end repeat
+          end tell
+        end if
+        return out
+        """
+        var error: NSDictionary?
+        let out = NSAppleScript(source: script)?.executeAndReturnError(&error)
+        let text = out?.stringValue ?? ""
+        return Set(text.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+                       .filter { !$0.isEmpty })
+    }
+
+    /// Read a Terminal tab's buffer by tty. Synchronous: the send path already runs off the
+    /// main thread and needs the answer before it can decide where to type.
+    static func readScreenSync(tty: String) -> String {
+        let script = """
+        tell application "Terminal"
+          repeat with w in windows
+            repeat with t in tabs of w
+              if tty of t is "\(escaped(tty))" then return history of t
+            end repeat
+          end repeat
+        end tell
+        return ""
+        """
+        var error: NSDictionary?
+        let out = NSAppleScript(source: script)?.executeAndReturnError(&error)
+        return out?.stringValue ?? ""
+    }
+
+    /// Lines this session has recently said, normalised, for recognising it on a screen.
+    static func signatures(transcriptPath: String, limit: Int = 4) -> [String] {
+        guard !transcriptPath.isEmpty,
+              let handle = FileHandle(forReadingAtPath: transcriptPath) else { return [] }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > 300_000 ? size - 300_000 : 0)
+        let data = (try? handle.readToEnd()) ?? Data()
+        guard let blob = String(data: data, encoding: .utf8) else { return [] }
+
+        var out: [String] = []
+        for line in blob.split(separator: "\n") {
+            guard let d = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            let msg = (obj["message"] as? [String: Any]) ?? obj
+            guard (msg["role"] as? String) == "assistant" else { continue }
+            var text = ""
+            if let str = msg["content"] as? String { text = str }
+            else if let parts = msg["content"] as? [[String: Any]] {
+                text = parts.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                            .joined(separator: " ")
+            }
+            let flat = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            if flat.count > 60 { out.append(String(flat.prefix(60))) }
+        }
+        return Array(out.suffix(limit))
+    }
+
+    /// Which tab to actually type into.
+    ///
+    /// A session usually owns its tab, and then this is trivial. But `claude agents`
+    /// multiplexes several sessions into ONE tab, each on its own daemon pty, so those
+    /// sessions have a tty that belongs to no window. They are still reachable: whichever
+    /// pane the multiplexer is showing receives what you type. The question is only whether
+    /// the pane on screen is the one you clicked, and the screen answers it, because the
+    /// session's own words are printed there.
+    ///
+    /// Checked at send time, never cached: the pane on screen can change between reading it
+    /// and typing, and a stale answer types into someone else's conversation.
+    static func hostTTY(for session: Session) -> String? {
+        // Asked fresh, never from the cache. `liveTabs` is refreshed on a 4s cycle for the
+        // panel's benefit, which is fine for labelling rows and wrong for deciding where to
+        // type: a tab opened since the last refresh would be declared not to exist, and the
+        // reply would be refused on a session sitting right there.
+        let tabs = liveTabsSync()
+        let marks = signatures(transcriptPath: session.transcriptPath)
+
+        func shows(_ tab: String) -> Bool {
+            let screen = readScreenSync(tty: tab)
+                .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            return marks.contains(where: { screen.contains($0) })
+        }
+
+        // Owning a tty is not the same as owning the tab it names. tty numbers are recycled:
+        // close a session and open another, and a dormant row's recorded /dev/ttys001 now
+        // belongs to somebody else's conversation. So the tab has to be showing this session's
+        // own words before it is trusted. A session that has not said anything yet has nothing
+        // to check against, and is taken at its word.
+        if !session.tty.isEmpty, tabs.contains(session.tty) {
+            if marks.isEmpty || shows(session.tty) { return session.tty }
+        }
+
+        guard !marks.isEmpty else { return nil }
+        for tab in tabs where tab.hasPrefix("/dev/") && tab != session.tty {
+            if shows(tab) { return tab }
+        }
+        return nil
     }
 
     static func readScreen(for session: Session, completion: @escaping (String?) -> Void) {
@@ -353,7 +468,14 @@ enum ITerm {
         guard !body.isEmpty else { completion(.refused("nothing to send")); return }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let check = foregroundCheck(tty: session.tty)
+            // Where the words actually have to go, which is not always this session's own tty.
+            guard let host = hostTTY(for: session) else {
+                DispatchQueue.main.async {
+                    completion(.refused("this session isn't the one on screen · switch to it first"))
+                }
+                return
+            }
+            let check = foregroundCheck(tty: host)
             if case .refused = check {
                 DispatchQueue.main.async { completion(check) }
                 return
@@ -367,7 +489,7 @@ enum ITerm {
                 }
                 script = itermSendScript(uuid: uuid, body: body, submit: submit)
             default:
-                script = terminalSendScript(tty: session.tty, body: body, submit: submit)
+                script = terminalSendScript(tty: host, body: body, submit: submit)
             }
             var error: NSDictionary?
             let out = NSAppleScript(source: script)?.executeAndReturnError(&error)

@@ -191,6 +191,91 @@ private struct RowStrip: View {
     }
 }
 
+/// A stage for the magnet interaction. Move the pointer around inside it: the droplet only
+/// reacts within `reach` of the notch mouth, so the empty space matters as much as the notch.
+private struct MagnetStage: View {
+    @ObservedObject var notes: PreviewNotes
+    @State private var tuning = MagnetTuning()
+    @State private var pointer: CGPoint?
+    @State private var guides = true
+    @State private var opened = false
+
+    private func slider(_ label: String, _ value: Binding<CGFloat>,
+                        _ range: ClosedRange<CGFloat>, _ fmt: String = "%.0f") -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 10.5))
+                .foregroundColor(.white.opacity(0.5))
+                .frame(width: 62, alignment: .leading)
+            Slider(value: value, in: range)
+                .controlSize(.mini)
+            Text(String(format: fmt, value.wrappedValue))
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundColor(.white.opacity(0.4))
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("MAGNET — move the pointer toward the notch")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundColor(.white.opacity(0.35))
+
+            ZStack {
+                Color(red: 0.13, green: 0.13, blue: 0.15)
+                MagnetField(notchSize: CGSize(width: 168, height: 34),
+                            pointer: pointer, tuning: tuning, showGuides: guides,
+                            open: opened ? 1 : 0,
+                            panelSize: CGSize(width: 300, height: 200))
+            }
+            .frame(width: 380, height: 300)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.08), lineWidth: 1))
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p): pointer = p
+                case .ended: pointer = nil
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Button(action: { opened.toggle() }) {
+                    Text(opened ? "collapse to the notch" : "flow out into the panel")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                        .background(Capsule().fill(Color(red: 0.48, green: 0.64, blue: 1.0)))
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 14)
+            }
+
+            VStack(spacing: 5) {
+                slider("reach",     $tuning.reach,     60...300)
+                slider("sag",       $tuning.sag,       6...110)
+                slider("spread",    $tuning.spread,    10...140)
+                slider("tension",   $tuning.tension,   0...900)
+                slider("stiffness", $tuning.stiffness, 40...500)
+                slider("damping",   $tuning.damping,   4...40)
+                slider("facing",    $tuning.facing,    0.2...4, "%.2f")
+                slider("flow out",  $tuning.openSpring, 30...400)
+                slider("flow damp", $tuning.openDamping, 4...40)
+                slider("viscosity", $tuning.lag,        0...0.6, "%.2f")
+                Toggle("show reach ring", isOn: $guides)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: 380)
+            .padding(.top, 2)
+
+            NoteField(text: notes.binding("MAGNET"), onCommit: notes.save)
+        }
+    }
+}
+
 struct PreviewGallery: View {
     @StateObject private var notes = PreviewNotes()
 
@@ -220,6 +305,8 @@ struct PreviewGallery: View {
                         .foregroundColor(.white.opacity(0.4))
                         .lineLimit(1).truncationMode(.head)
                 }
+
+                MagnetStage(notes: notes)
 
                 RowStrip(notes: notes)
 

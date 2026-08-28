@@ -33,7 +33,11 @@ struct Session: Identifiable {
     ///
     /// This is an affordance test, not a safety check. The tty guard on the send path is
     /// what decides whether typing is actually safe at that moment.
-    var replyable: Bool { attached }
+    /// Anything we could plausibly reach. A session in its own tab obviously; but also one
+    /// multiplexed into someone else's tab by `claude agents`, which is reachable whenever
+    /// its pane is the one on screen. That can only be answered at send time, by looking, so
+    /// the field is offered and the refusal explains rather than the control vanishing.
+    var replyable: Bool { attached || !transcriptPath.isEmpty }
 
     /// A numbered selector wants a digit, not prose.
     var wantsDigit: Bool { promptKind == "permission" }
