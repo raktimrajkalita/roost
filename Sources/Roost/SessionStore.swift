@@ -17,6 +17,7 @@ struct Session: Identifiable {
     var transcriptPath: String = ""
     var promptKind: String = ""       // permission | input | idle | ""
     var attached: Bool = false        // its tty really is a terminal tab we can type into
+    var renamed: Bool = false         // displayName came from you, not the terminal
 
     var itermUUID: String? {
         guard let range = itermSession.range(of: ":") else { return nil }
@@ -67,6 +68,7 @@ final class SessionStore {
 
     private let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/state")
     private let muteDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/mutes")
+    private let nameDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-notch/names")
     private var dismissedDoneBefore: Double = 0   // done rows finished before this are hidden (cleared by a refresh)
     private var dismissedBefore: [String: Double] = [:]   // per-session dismiss — hidden until its next update
     private var keptIds: Set<String> = []                 // pulled back onto the panel from search
@@ -113,6 +115,21 @@ final class SessionStore {
     }
 
     func isKept(_ id: String) -> Bool { keptIds.contains(id) }
+
+    /// Give a session your own name, or clear it back to the terminal's.
+    ///
+    /// Stored per session rather than per tab: a tab title is whatever Claude Code last set
+    /// it to and gets overwritten, whereas a name you chose should outlast that.
+    func rename(id: String, to name: String) {
+        let fid = (id as NSString).deletingPathExtension
+        let path = (nameDir as NSString).appendingPathComponent(fid)
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: nameDir, withIntermediateDirectories: true)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { try? fm.removeItem(atPath: path) }
+        else { try? trimmed.write(toFile: path, atomically: true, encoding: .utf8) }
+        reload()
+    }
 
     /// Toggle the per-session mute flag the reporter checks before playing the chime.
     func toggleMute(id: String) {
@@ -189,6 +206,13 @@ final class SessionStore {
             if let uuid = s.itermUUID, let name = names[uuid] { s.displayName = name }   // iTerm session name
             else if !s.tty.isEmpty, let name = names[s.tty] { s.displayName = name }      // Terminal.app custom title (rename)
             let fid = (f as NSString).deletingPathExtension
+            // A name you chose wins over anything the terminal reports.
+            if let custom = try? String(contentsOfFile: (nameDir as NSString).appendingPathComponent(fid),
+                                        encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+               !custom.isEmpty {
+                s.displayName = custom
+                s.renamed = true
+            }
             s.muted = fm.fileExists(atPath: (muteDir as NSString).appendingPathComponent(fid))
 
             everything.append(s)                                  // search sees every session, however old
@@ -223,7 +247,7 @@ final class SessionStore {
                 || a[i].lastAction != b[i].lastAction || a[i].displayName != b[i].displayName
                 || a[i].muted != b[i].muted
                 || a[i].message != b[i].message || a[i].promptKind != b[i].promptKind
-                || a[i].attached != b[i].attached { return false }
+                || a[i].attached != b[i].attached || a[i].renamed != b[i].renamed { return false }
         }
         return true
     }

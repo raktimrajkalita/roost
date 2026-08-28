@@ -65,6 +65,7 @@ final class NotchModel: ObservableObject {
     var onMute: (String) -> Void = { _ in }
     var onDismiss: (String) -> Void = { _ in }
     var onKeep: (String) -> Void = { _ in }       // pull a search result back onto the panel
+    var onRename: (String, String) -> Void = { _, _ in }
     var onUpdateNow: () -> Void = { }
     var onUpdateDismiss: () -> Void = { }
     var onReload: () -> Void = { }
@@ -547,10 +548,16 @@ struct RowView: View {
     var offPanel: Bool = false          // a search hit that isn't on the panel right now
     var animate: Bool = true            // false while the panel is off screen
     @State private var hover = false
+    @State private var renaming = false
+    @State private var nameDraft = ""
     @FocusState private var fieldFocused: Bool
+    @FocusState private var nameFocused: Bool
 
     private var expanded: Bool { model.replyingTo == session.id }
-    private var showsField: Bool { hover || expanded }
+    /// Collapsed, the field sits in the subtitle slot so hovering costs no height. Expanded,
+    /// it moves below the message: you read first, then answer, which is the order the eye
+    /// already works in.
+    private var showsInlineField: Bool { hover && !expanded }
 
     // Actionable rows sit forward, working rows sit back — carried by the whole row, not just the dot.
     private var nameOpacity: Double {
@@ -577,6 +584,26 @@ struct RowView: View {
                 set: { model.drafts[session.id] = $0 })
     }
 
+    /// A light travelling across the field while the send is in flight: the round trip runs
+    /// ps and then an AppleScript, so it takes a beat.
+    private var shimmer: some View {
+        TimelineView(.animation) { tl in
+            let p = (tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.5)) / 1.5
+            GeometryReader { geo in
+                let w = geo.size.width
+                LinearGradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .white.opacity(0.17), location: 0.5),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .leading, endPoint: .trailing)
+                .frame(width: w * 0.4)
+                .offset(x: -w * 0.4 + p * (w * 1.4))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .allowsHitTesting(false)
+    }
+
     private func send() {
         let body = (model.drafts[session.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
@@ -591,15 +618,36 @@ struct RowView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     // The name is the way back to the terminal. Only the name: the rest of
                     // the row is for typing, and one stray click shouldn't yank you away.
-                    Text(session.displayName)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundColor(.white.opacity(nameOpacity))
-                        .lineLimit(1)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onFocus(session) }
-                        .help("Go to this session in the terminal")
+                    if renaming {
+                        TextField("name this session", text: $nameDraft)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.97))
+                            .focused($nameFocused)
+                            .frame(height: 17)
+                            .onSubmit {
+                                model.onRename(session.id, nameDraft)
+                                renaming = false
+                            }
+                            .onExitCommand { renaming = false }
+                    } else {
+                        Text(session.displayName)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundColor(.white.opacity(nameOpacity))
+                            .lineLimit(1)
+                            .contentShape(Rectangle())
+                            // Single click goes to the terminal, double click renames. The
+                            // rename has to win, so the double tap is declared first.
+                            .onTapGesture(count: 2) {
+                                nameDraft = session.displayName
+                                renaming = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { nameFocused = true }
+                            }
+                            .onTapGesture { onFocus(session) }
+                            .help("Click to go to the terminal · double-click to rename")
+                    }
 
-                    if showsField {
+                    if showsInlineField {
                         TextField("reply…", text: draft)
                             .textFieldStyle(.plain)
                             .font(.system(size: 11))
@@ -610,7 +658,15 @@ struct RowView: View {
                             .onExitCommand { model.closeReply() }
                             .onChange(of: fieldFocused) { f in
                                 model.inlineEditing = f
-                                if f { model.openReply(session) }   // typing here opens the reader
+                                guard f else { return }
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                                    model.openReply(session)        // clicking the field opens the reader
+                                }
+                                // The field it was focused in has just been replaced by the one
+                                // at the bottom, so focus has to follow it down.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                                    fieldFocused = true
+                                }
                             }
                     } else {
                         Text(session.lastAction.isEmpty ? session.status : session.lastAction)
@@ -632,8 +688,13 @@ struct RowView: View {
                             }
                             .buttonStyle(.plain)
                             Button(action: {
-                                if expanded { model.closeReply() }
-                                else { offPanel ? onKeep(session.id) : onDismiss(session.id) }
+                                if expanded {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
+                                        model.closeReply()
+                                    }
+                                } else {
+                                    offPanel ? onKeep(session.id) : onDismiss(session.id)
+                                }
                             }) {
                                 Image(systemName: expanded ? "chevron.up" : (offPanel ? "plus" : "xmark"))
                                     .font(.system(size: offPanel && !expanded ? 11 : 10, weight: .semibold))
@@ -665,12 +726,40 @@ struct RowView: View {
             .frame(height: 46)
 
             if expanded {
-                ReplyBody(session: session,
-                          choices: model.promptChoices,
-                          state: model.send,
-                          messageHeight: replyMessageHeight(for: session),
-                          onChoose: { model.onChoose(session, $0) })
-                    .padding(.bottom, 9)
+                VStack(alignment: .leading, spacing: 7) {
+                    ReplyBody(session: session,
+                              choices: model.promptChoices,
+                              state: model.send,
+                              messageHeight: replyMessageHeight(for: session),
+                              onChoose: { model.onChoose(session, $0) })
+
+                    TextField("reply…", text: draft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...5)
+                        .font(.system(size: 12.5))
+                        .foregroundColor(.white.opacity(model.send == .sending ? 0.4 : 0.95))
+                        .focused($fieldFocused)
+                        .disabled(model.send == .sending)
+                        .onSubmit(send)
+                        .onExitCommand {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
+                                model.closeReply()
+                            }
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(.white.opacity(0.05))
+                                .overlay(RoundedRectangle(cornerRadius: 10)
+                                    .stroke(.white.opacity(fieldFocused ? 0.26 : 0.10), lineWidth: 1))
+                        )
+                        .overlay { if model.send == .sending { shimmer } }
+                        .padding(.leading, 29)
+                }
+                .padding(.bottom, 9)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .top)),
+                    removal: .opacity))
             }
         }
         .padding(.horizontal, 10)

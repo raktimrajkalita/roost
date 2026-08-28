@@ -39,6 +39,7 @@ final class NotchController {
         model.onDismiss = { [weak self] id in self?.store.dismiss(id: id) }
         model.onReload = { [weak self] in self?.store.forceRefresh() }
         model.onKeep = { [weak self] id in self?.store.keep(id: id) }
+        model.onRename = { [weak self] id, name in self?.store.rename(id: id, to: name) }
         model.searchFn = { [weak self] q in self?.store.search(q) ?? [] }
         model.onLayout = { [weak self] in self?.relayout() }
         model.onSearchWillOpen = { [weak self] in
