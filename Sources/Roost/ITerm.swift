@@ -218,8 +218,30 @@ enum ITerm {
         return out?.stringValue ?? ""
     }
 
-    /// Lines this session has recently said, normalised, for recognising it on a screen.
-    static func signatures(transcriptPath: String, limit: Int = 4) -> [String] {
+    /// Reduce text to what survives being printed: lowercase letters, digits and single
+    /// spaces.
+    ///
+    /// The transcript holds source, the terminal shows rendering. "**Working and proven:**"
+    /// is stored with its asterisks and drawn without them, so comparing the two literally
+    /// can never match. Box drawing, bullets, indentation and wrapping all differ the same
+    /// way. What both sides agree on is the words.
+    static func fingerprint(_ s: String) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        var space = true                       // leading space suppressed
+        for ch in s.lowercased() {
+            if ch.isLetter || ch.isNumber { out.append(ch); space = false }
+            else if !space { out.append(" "); space = true }
+        }
+        return out.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Phrases this session has recently said, as fingerprints, for recognising it on screen.
+    ///
+    /// Several per message and several messages deep, because a terminal only keeps the
+    /// visible screen: anything older has scrolled away, and the newest message may be half
+    /// drawn. Slices from across each one give the match somewhere to land.
+    static func signatures(transcriptPath: String, limit: Int = 6) -> [String] {
         guard !transcriptPath.isEmpty,
               let handle = FileHandle(forReadingAtPath: transcriptPath) else { return [] }
         defer { try? handle.close() }
@@ -240,10 +262,19 @@ enum ITerm {
                 text = parts.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
                             .joined(separator: " ")
             }
-            let flat = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-            if flat.count > 60 { out.append(String(flat.prefix(60))) }
+            let flat = fingerprint(text)
+            if flat.count > 45 { out.append(flat) }
         }
-        return Array(out.suffix(limit))
+
+        // Take the tail of the conversation, then several windows from each message.
+        var marks: [String] = []
+        for msg in out.suffix(limit) {
+            let chars = Array(msg)
+            for start in stride(from: 0, to: max(chars.count - 40, 1), by: 60) {
+                marks.append(String(chars[start..<min(start + 40, chars.count)]))
+            }
+        }
+        return marks
     }
 
     /// Which tab to actually type into.
@@ -266,8 +297,7 @@ enum ITerm {
         let marks = signatures(transcriptPath: session.transcriptPath)
 
         func shows(_ tab: String) -> Bool {
-            let screen = readScreenSync(tty: tab)
-                .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            let screen = fingerprint(readScreenSync(tty: tab))
             return marks.contains(where: { screen.contains($0) })
         }
 
