@@ -31,6 +31,10 @@ final class NotchController {
     private let panelWidth: CGFloat = 380
     private let rowAnim: Double = 0.28        // row swipe-out; the window shrinks on the same clock
 
+    // The open/collapse spring, and the lock that stops it being reversed part-way.
+    private let springTime: Double = 0.34
+    private var transitionUntil = Date.distantPast    // no new show/hide before this
+
     init(store: SessionStore) {
         self.store = store
         model.width = panelWidth
@@ -97,8 +101,19 @@ final class NotchController {
             // it collapses the instant you leave, which reads as a dismiss, not a back.
             self.pinnedUntil = Date().addingTimeInterval(2.5)
             self.layoutWork?.cancel()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-                self.relayout(allowShrink: true)
+            // The row is gone, so the window is taller than the panel now. Put it right only
+            // once the content has finished settling. Shrinking at 0.30s landed in the middle
+            // of the 0.34s spring, so an animated window edge crossed content that was still
+            // moving, and the rows came out squashed and clipped. Same failure the click-away
+            // path already avoids by waiting until nothing is on screen.
+            //
+            // Instant, not animated: the window is transparent and top-anchored, so it has no
+            // visible edge of its own. Animating it only puts a second clock against the spring.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                guard self.model.replyingTo == nil else { return }   // re-opened since
+                var target = self.panelFrame()
+                target.origin.x = self.panel.frame.origin.x
+                self.panel.setFrame(target, display: true, animate: false)
             }
         }
         model.onSend = { [weak self] session, text in
@@ -268,15 +283,22 @@ final class NotchController {
         panel.orderFrontRegardless()
         visible = true
         model.expanded = true                    // springs open from the notch
+        transitionUntil = Date().addingTimeInterval(springTime)
     }
 
     private func hide() {
         visible = false
         layoutWork?.cancel()                     // don't resize the window mid-collapse
         model.expanded = false
+        transitionUntil = Date().addingTimeInterval(springTime)
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.visible == false else { return }
             self.panel.orderOut(nil)
+            // Nothing is on screen now, so this is the one moment a frame change is free.
+            // Whatever size the last interaction left behind, the next open starts correct.
+            var target = self.panelFrame()
+            target.origin.x = self.panel.frame.origin.x
+            self.panel.setFrame(target, display: false, animate: false)
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)   // remove after the collapse settles
@@ -488,6 +510,15 @@ final class NotchController {
             || model.searching                  // never yank the panel away mid-search
             || now < pinnedUntil
             || (visible && now.timeIntervalSince(lastInside) < 0.25)
+        // A transition owns the panel until it finishes. Without this, moving in and out
+        // faster than the 0.34s spring reversed a collapse that was still running, and the
+        // panel never reached either end.
+        //
+        // Reversing mid-flight is the one thing that must not happen, so requests that arrive
+        // during a transition are dropped, not queued. The hover loop runs continuously, so
+        // the next tick after the lock lifts re-reads the pointer and does the right thing
+        // with whatever is true then, which is better than acting on a stale intent.
+        guard now >= transitionUntil else { return }
         if want {
             if !visible { show() }
         } else if visible {
@@ -495,3 +526,4 @@ final class NotchController {
         }
     }
 }
+
