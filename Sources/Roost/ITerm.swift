@@ -500,9 +500,16 @@ enum ITerm {
         DispatchQueue.global(qos: .userInitiated).async {
             // Where the words actually have to go, which is not always this session's own tty.
             guard let host = hostTTY(for: session) else {
-                DispatchQueue.main.async {
-                    completion(.refused("this session isn't the one on screen · switch to it first"))
-                }
+                // Two different refusals wear the same shape here. A session running in a
+                // terminal whose pane is not the one on screen can be reached by switching to
+                // it. A session with no controlling tty at all — the desktop app, where Claude
+                // Code is not hosted by a terminal — cannot be reached by switching to
+                // anything, so telling someone to switch sends them looking for a tab that
+                // does not exist.
+                let why = session.tty.isEmpty
+                    ? "this session has no terminal to type into"
+                    : "this session isn't the one on screen · switch to it first"
+                DispatchQueue.main.async { completion(.refused(why)) }
                 return
             }
             let check = foregroundCheck(tty: host)
