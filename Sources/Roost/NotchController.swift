@@ -23,7 +23,6 @@ final class NotchController {
     private var hideWork: DispatchWorkItem?
     private var layoutWork: DispatchWorkItem?
     private var clickAway: Any?          // global mouse monitor while searching
-    private var magnet: MagnetController?
     private var updatePoll: Timer?       // reads the updater's progress file
     private var realPct = 0              // last milestone the updater actually reported
     private var stepStart = Date()       // when that milestone landed
@@ -145,13 +144,6 @@ final class NotchController {
         model.onUpdateNow = { [weak self] in self?.startUpdate() }
         model.onUpdateDismiss = { [weak self] in self?.setUpdate(.none) }
         buildPanel()
-        // The liquid notch is off by default while we work out whether it is what is upsetting
-        // the panel. It is an always-on overlay window at screenSaver level sitting over the
-        // menu bar, so it is the first thing to take out of the picture, not the last.
-        // ROOST_MAGNET=1 puts it back; the preview harness always shows it.
-        if ProcessInfo.processInfo.environment["ROOST_MAGNET"] == "1" {
-            magnet = MagnetController(notchRect: notchRect(), notchHeight: notchHeight)
-        }
         refresh()
         showInstalledIfJustUpdated()
         // quiet check shortly after launch, then daily
@@ -490,14 +482,6 @@ final class NotchController {
         let overPanel = visible && panel.frame.contains(m)
         let inside = inTrigger || overPanel
         if inside { lastInside = now }
-        // The liquid edge answers the pointer well before the panel does, so it is driven
-        // from the same loop but with its own, larger radius.
-        if let magnet {
-            let n = notchRect()
-            let near = hypot(m.x - n.midX, m.y - n.midY) < magnet.reach + 40
-            magnet.update(pointerNear: near, panelVisible: visible)
-        }
-
         let want = inside
             || model.replyingTo != nil          // never yank the panel away mid-reply
             || model.inlineEditing              // ...or while a row's own field has focus
